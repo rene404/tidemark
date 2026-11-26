@@ -221,3 +221,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# tidemark / macscope — lokale Laufzeitdaten, niemals committen
+*.sqlite3*
+access-token
+agent.lock
+.DS_Store
