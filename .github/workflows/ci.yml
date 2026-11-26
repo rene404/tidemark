@@ -29,7 +29,7 @@ jobs:
         run: |
           python -m compileall -q macscope scripts
           node --check macscope/web/app.js
-          bash -n install.command start.command scripts/install-macos.sh
+          bash -n install.command install-managed.command start.command scripts/install-macos.sh
 
       - name: Paket mit PyObjC installieren, AppKit-Modul importieren
         run: |
