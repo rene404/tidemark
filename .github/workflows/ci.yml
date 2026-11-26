@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Tests (Backend + HTTP)
+        run: python -m unittest discover -s tests -v
+
+      - name: Syntaxprüfungen
+        run: |
+          python -m compileall -q macscope scripts
+          node --check macscope/web/app.js
+          bash -n install.command start.command scripts/install-macos.sh
+
+      - name: Paket mit PyObjC installieren, AppKit-Modul importieren
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --quiet .
+          .venv/bin/python -c "import macscope.platform_macos"
+          .venv/bin/macscope diagnose
