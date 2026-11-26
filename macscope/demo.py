@@ -20,7 +20,7 @@ class DemoAdapter:
         return target in self.running
 
 
-def run(service, port):
+def run(service, port, managed=False):
     adapter = DemoAdapter()
     stopped = False
     def stop(*_):
