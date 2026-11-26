@@ -16,9 +16,9 @@ Feinschliff) hinter derselben Schnittstelle.
 
 # MacScope 0.1 — eigener iMac-Verlauf mit Fernaktionen
 
-Ein erster Prototyp für Renés iMac zuhause. Ein Agent läuft in der angemeldeten
+Ein erster Prototyp für den Ziel-Mac (iMac). Ein Agent läuft in der angemeldeten
 macOS-Benutzersitzung, speichert Anwendungsereignisse in SQLite und bietet ein
-lokales Dashboard. Der Laptop öffnet dieses Dashboard durch einen SSH-Tunnel.
+lokales Dashboard. Der Laptop öffnet dieses Dashboard durch einen SSH-Tunnel über Tailscale.
 
 **Status:** Backend und Dashboard sind automatisiert prüfbar. Die Anbindung an
 AppKit und der LaunchAgent müssen auf einem echten Mac abgenommen werden.
@@ -65,8 +65,15 @@ Aktionen trotzdem verweigern; das erscheint als Ergebnis im Verlauf.
 
 ## Auf dem iMac installieren
 
-1. ZIP entpacken und Terminal im entpackten Projektordner öffnen.
-2. Falls noch kein passendes Python vorhanden ist, Python 3.13 installieren.
+1. Falls noch kein passendes Python vorhanden ist, Python 3.13 installieren.
+2. Quellcode holen (git kommt mit den Xcode Command Line Tools; alternativ
+   auf GitHub „Code → Download ZIP“ für den Branch `develop`):
+
+```bash
+git clone https://github.com/rene404/tidemark.git
+cd tidemark
+```
+
 3. Ausführen:
 
 ```bash
@@ -113,9 +120,13 @@ Auf dem iMac unter Systemeinstellungen → Allgemein → Freigaben die
 einen eigenen SSH-Schlüssel verwenden. Die genaue Menüführung kann je nach
 macOS-Version abweichen.
 
-Für den ersten Test reicht das Heimnetz. Später kann der Tunnel über ein
-privates VPN wie Tailscale oder WireGuard laufen. **Dabei wird weiterhin der
-normale macOS-SSH-Dienst benutzt.** VPN-Einrichtung ist nicht Teil des Pakets.
+Die Verbindung läuft über **Tailscale**: Tailscale auf iMac und Laptop
+installieren und beide im selben Tailnet anmelden; `tailscale status` zeigt
+dann das jeweils andere Gerät. Als `IMAC_ADRESSE` dient der Tailscale-Name
+(MagicDNS) oder die `100.x.y.z`-Adresse des iMac. So ist der iMac auch von
+unterwegs erreichbar, ohne Portfreigabe im Router. **Für den Tunnel wird
+weiterhin der normale macOS-SSH-Dienst benutzt**, nicht Tailscale SSH.
+Tailscale-Einrichtung ist nicht Teil des Pakets.
 
 Auf dem Laptop, `BENUTZER` und `IMAC_ADRESSE` durch deine Werte ersetzen:
 
@@ -232,8 +243,10 @@ python3 -m unittest discover -s tests -v
 ```
 
 Die optionalen Browserprüfungen brauchen Playwright und Chromium; siehe
-[Prüfprotokoll](docs/VALIDIERUNG.md). Für den echten Mac enthält dieses
-Prüfprotokoll eine konkrete Abnahmefolge.
+[Prüfprotokoll](docs/VALIDIERUNG.md). Die Abnahme auf echter Hardware folgt
+[ABNAHME-PHASE0.md](docs/ABNAHME-PHASE0.md) (auf dem Branch
+`feature/phase0-nativtest`). Bei jedem Push und Pull Request laufen die Tests
+automatisch auf GitHub Actions (macOS).
 
 Technischer Aufbau und Erweiterungen:
 [ARCHITEKTUR.md](docs/ARCHITEKTUR.md). Priorisierte Erweiterungen sind ein
