@@ -18,10 +18,11 @@ class ServiceError(Exception):
 
 
 class Service:
-    def __init__(self, store: Store, allowed_bundles=None, demo=False):
+    def __init__(self, store: Store, allowed_bundles=None, demo=False, managed=False):
         self.store = store
         self.allowed_bundles = frozenset({"org.mozilla.firefox"} if allowed_bundles is None else allowed_bundles)
         self.demo = demo
+        self.managed = managed
         self.started_at = time.time()
         self._lock = threading.RLock()
         self._apps = []
@@ -34,7 +35,7 @@ class Service:
         self._closed = False
         store.recover_commands()
         store.prune()
-        store.event("agent.started", details={"version": __version__, "demo": demo})
+        store.event("agent.started", details={"version": __version__, "demo": demo, "managed": managed})
 
     def update(self, apps, active=None):
         with self._lock:
@@ -48,7 +49,7 @@ class Service:
             return {
                 "version": __version__, "hostname": platform.node(),
                 "platform": platform.platform(), "started_at": self.started_at,
-                "demo": self.demo, "paused": self._paused,
+                "demo": self.demo, "managed": self.managed, "paused": self._paused,
                 "agent_online": not self._closed and age is not None and age < 10,
                 "snapshot_age_seconds": round(age, 1) if age is not None else None,
                 "active_app": copy.deepcopy(self._active),
@@ -69,6 +70,8 @@ class Service:
             self.store.event(kind, app, details)
 
     def toggle_pause(self):
+        if self.managed:
+            raise ServiceError("Im verwalteten Modus kann die Aufzeichnung nicht pausiert werden.", 403)
         with self._lock:
             self._paused = not self._paused
             self.store.event("recording.paused" if self._paused else "recording.resumed")

@@ -59,9 +59,10 @@ class Adapter:
 
 class MenuDelegate(Foundation.NSObject):
     @objc.python_method
-    def configure(self, service, port):
+    def configure(self, service, port, managed=False):
         self.service = service
         self.port = port
+        self.managed = managed
         self.adapter = Adapter()
         self.observers = []
         self.last_prune = time.monotonic()
@@ -111,14 +112,18 @@ class MenuDelegate(Foundation.NSObject):
     def setupMenu(self):
         self.item = AppKit.NSStatusBar.systemStatusBar().statusItemWithLength_(AppKit.NSVariableStatusItemLength)
         self.item.button().setTitle_("◉ MS")
-        self.item.button().setToolTip_("MacScope zeichnet Anwendungsereignisse auf")
+        self.item.button().setToolTip_("MacScope zeichnet Anwendungsereignisse auf"
+                                       + (" (verwaltet)" if self.managed else ""))
         menu = AppKit.NSMenu.alloc().init()
         title = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("MacScope · Aufzeichnung aktiv", None, "")
         title.setEnabled_(False)
         menu.addItem_(title)
         self.title_item = title
-        for label, action in [("Dashboard öffnen", "openDashboard:"),
-                              ("Aufzeichnung pausieren", "togglePause:"), ("MacScope beenden", "stop:")]:
+        entries = [("Dashboard öffnen", "openDashboard:")]
+        if not self.managed:
+            # Verwalteter Modus: weder Pausieren noch Beenden über die Menüleiste.
+            entries += [("Aufzeichnung pausieren", "togglePause:"), ("MacScope beenden", "stop:")]
+        for label, action in entries:
             item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(label, action, "")
             item.setTarget_(self)
             menu.addItem_(item)
@@ -141,6 +146,8 @@ class MenuDelegate(Foundation.NSObject):
         self.adapter.workspace.openURL_(url)
 
     def togglePause_(self, sender):
+        if self.managed:
+            return
         paused = self.service.toggle_pause()
         self.item.button().setTitle_("Ⅱ MS" if paused else "◉ MS")
         self.title_item.setTitle_("MacScope · pausiert" if paused else "MacScope · Aufzeichnung aktiv")
@@ -150,6 +157,8 @@ class MenuDelegate(Foundation.NSObject):
                 self.service.record("app.observed", app)
 
     def stop_(self, sender):
+        if self.managed:
+            return
         AppKit.NSApplication.sharedApplication().terminate_(None)
 
     def applicationWillTerminate_(self, notification):
@@ -161,11 +170,11 @@ class MenuDelegate(Foundation.NSObject):
         self.service.close()
 
 
-def run(service, port):
+def run(service, port, managed=False):
     app = AppKit.NSApplication.sharedApplication()
     app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
     delegate = MenuDelegate.alloc().init()
-    delegate.configure(service, port)
+    delegate.configure(service, port, managed)
     app.setDelegate_(delegate)
     for name in (signal.SIGINT, signal.SIGTERM):
         signal.signal(name, lambda *_: app.terminate_(None))
