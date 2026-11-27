@@ -26,12 +26,14 @@ flowchart LR
     end
     subgraph Target["Target Mac"]
       A["macscope agent<br/>(user session, AppKit)"]
+      R["root recorder<br/>(LaunchDaemon)"]
       DB[("SQLite timeline")]
       W["root watchdog<br/>(LaunchDaemon)"]
       ARD["Apple Screen Sharing<br/>(system service)"]
     end
     B -- "SSH tunnel over Tailscale" --> A
-    A --> DB
+    A -- "Unix socket" --> R
+    R --> DB
     W -. "keeps the agent running" .-> A
     SS -- "VNC over Tailscale" --> ARD
 ```
@@ -45,8 +47,9 @@ flowchart LR
   Sharing (`vnc://<tailscale-name>`). An own Swift module may replace it later
   behind the same interface ([docs/VIEWER-NAHT.md](docs/VIEWER-NAHT.md)).
 - **Managed mode:** the watched account is a standard user. The program files
-  belong to root and a root watchdog restarts the agent, so only an
-  administrator can switch it off ([docs/VERWALTETER-MODUS.md](docs/VERWALTETER-MODUS.md)).
+  belong to root, a root watchdog restarts the agent, and a root recorder service
+  owns the timeline, so the user can neither switch it off nor delete the
+  history; only an administrator can ([docs/VERWALTETER-MODUS.md](docs/VERWALTETER-MODUS.md)).
 
 ## Features
 
@@ -58,7 +61,7 @@ flowchart LR
 | Live screen | Opens Apple Screen Sharing over Tailscale; every request and every actual connection (peer, duration) is logged in the timeline |
 | Search | By app / bundle ID and event type, paging into older entries |
 | Retention | 30 days by default, pruned at start and hourly |
-| Managed mode | No pause / quit in the menu bar, settings only from a root-owned file, automatic restart, root watchdog that also detects a hung or stopped agent |
+| Managed mode | No pause / quit in the menu bar, settings only from a root-owned file, automatic restart, root watchdog that also detects a hung or stopped agent, timeline stored by a root service (append-only for the user) |
 | Access | Loopback only, access token, host and origin checks, strict CSP |
 
 **Not collected:** browser URLs, window titles, file contents or changes,
@@ -99,7 +102,7 @@ logged in.
 Show the access token (as admin):
 
 ```bash
-sudo -H -u USER "/Library/Application Support/MacScope/venv/bin/macscope" token
+sudo "/Library/Application Support/MacScope/venv/bin/macscope" token
 ```
 
 Check the status:
@@ -171,19 +174,24 @@ the values come from `/Library/Application Support/MacScope/managed.json`.
 
 ```text
 ~/Library/Application Support/MacScope/      (per user, mode 0700)
-  access-token        access token, mode 0600
-  timeline.sqlite3    events and action log
+  access-token        access token, mode 0600 (unmanaged mode)
+  timeline.sqlite3    events and action log (unmanaged mode)
   agent.lock          prevents two agents on the same data directory
   logs/               agent log (rotated at 1 MB, 3 generations)
   heartbeat           liveness file for the root watchdog (managed mode)
+
+/Library/Application Support/MacScope-Data/  (managed mode, root only, 0700)
+  access-token, timeline.sqlite3   owned by the root recorder service
 ```
 
 - The database is **not encrypted at application level**. Enable FileVault on
   both Macs. The HTTP connection never leaves the machine; SSH protects the
   transport between the Macs. The viewer keeps no copy of the database.
 - Expired events are deleted logically; old database pages are not securely wiped.
-- A user with access to the watched account can read its own data directory
-  and token. This is not tamper-proof forensic logging; see the limits in
+- In managed mode the watched user cannot read, change or delete the stored
+  timeline. The agent can only append events and read them back through the
+  recorder's socket, so the user can still add entries and obtain the token.
+  This is not tamper-proof forensic logging; see the limits in
   [docs/VERWALTETER-MODUS.md](docs/VERWALTETER-MODUS.md).
 
 ## Demo without a real session
@@ -197,7 +205,8 @@ python3 -m macscope token --demo        # second terminal
 
 ## Uninstall
 
-Managed mode (keeps the user's timeline data):
+Managed mode (keeps the timeline in `/Library/Application Support/MacScope-Data`;
+add `--daten-loeschen` to delete it too):
 
 ```bash
 sudo bash install-managed.command remove
@@ -227,7 +236,7 @@ releases go to `main`.
 
 | Path | Purpose |
 |---|---|
-| `macscope/` | Agent: AppKit collector, service, store, HTTP server, viewer seam, managed mode, watchdog |
+| `macscope/` | Agent: AppKit collector, service, store, HTTP server, viewer seam, managed mode, watchdog, root recorder |
 | `macscope/web/` | Dashboard (static HTML/CSS/JS, no external resources) |
 | `scripts/` | Installers and LaunchAgent helpers |
 | `tools/capture-probe/` | Swift test tool for phase-B risks (screen-recording permission behaviour) |

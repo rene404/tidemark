@@ -16,9 +16,13 @@ dafür, dass er dort läuft und bleibt.
 | Konfiguration | `/Library/Application Support/MacScope/managed.json` | Zielbenutzer, freigegebene Apps, Aufbewahrung, Port |
 | Systemweiter LaunchAgent | `/Library/LaunchAgents/local.macscope.managed-agent.plist` | Startet den Agenten bei jeder GUI-Anmeldung; bei unerwartetem Ende Neustart nach 10 s |
 | root-Wächter (LaunchDaemon) | `/Library/LaunchDaemons/local.macscope.watchdog.plist` | Alle 30 s: Agent in der Sitzung des Zielbenutzers geladen, laufend und lebendig? Sonst nachladen/starten/neu starten |
+| Aufzeichnungsdienst (LaunchDaemon, root) | `/Library/LaunchDaemons/local.macscope.recorder.plist` | Besitzt Verlauf und Zugriffsschlüssel; der Agent schreibt und liest nur über ihn (#22) |
+| Verlauf + Zugriffsschlüssel | `/Library/Application Support/MacScope-Data/` (root, 0700) | `timeline.sqlite3`, `access-token`; für den Benutzer weder lesbar noch löschbar |
+| Socket | `/var/run/macscope/recorder.sock` (Ordner root 0755, Socket gehört dem Zielbenutzer, 0600) | Nur der Zielbenutzer (geprüft per Kernel-Kennung der Gegenseite) und root dürfen verbinden |
 | Lebenszeichen | `~/Library/Application Support/MacScope/heartbeat` (Benutzer) | Agent aktualisiert es alle 10 s vom Hauptthread |
 | Wächter-Zustand | `/Library/Application Support/MacScope/watchdog-state.json` | Merkt sich ein veraltetes Lebenszeichen bis zur nächsten Prüfung |
 | Wächter-Protokoll | `/Library/Logs/MacScope-watchdog.log` | Jede Wiederherstellung mit Zeitstempel; Rotation über `/etc/newsyslog.d/macscope.conf` (3 × 1 MB) |
+| Dienst-Protokoll | `/Library/Logs/MacScope-recorder.log` (0600) | Start, abgelehnte Verbindungen, Fehler; gleiche Rotation |
 
 Im verwalteten Modus:
 
@@ -32,6 +36,14 @@ Im verwalteten Modus:
   Symlink, fehlerhaft), **startet der Agent nicht**, statt still unverwaltet zu laufen.
 - Protokoll des Agenten: `~/Library/Application Support/MacScope/logs/agent.log`
   (rotiert ab 1 MB, 3 Generationen).
+- **Aufzeichnungsdienst:** Der Agent kennt nur die Operationen Ereignis anhängen,
+  Ereignisse lesen, Auftrag anlegen/fortschreiben/lesen, Aufräumen (nur nach
+  Aufbewahrungsfrist) und Schlüssel holen. **Löschen gibt es nicht.** Ist der Dienst
+  kurz weg, puffert der Agent bis zu 1000 Ereignisse mit Originalzeit und schreibt sie
+  nach; das Dashboard meldet solange `503`. Beim Start wartet der Agent bis zu 30 s
+  auf den Dienst, sonst beendet er sich mit 75 und launchd versucht es erneut. Der
+  Wächter lädt den Dienst nach, falls er entladen wurde.
+- Im Benutzerordner bleiben nur `agent.lock`, `logs/` und `heartbeat`.
 - **Lebenszeichen:** Ist es älter als 120 s, und zwar bei **zwei Prüfungen in Folge**,
   setzt der Wächter einen angehaltenen Prozess fort (`SIGCONT`) und startet den
   Agenten neu (`kickstart -k`). Zwei Prüfungen, weil das Lebenszeichen während des
@@ -63,17 +75,31 @@ sudo launchctl print system/local.macscope.watchdog | grep -E "state|last exit"
 launchctl print gui/$(id -u BENUTZER)/local.macscope.managed-agent | grep state
 ```
 
-Entfernen (Verlaufsdaten im Benutzerkonto bleiben):
+Zugriffsschlüssel anzeigen (als Admin):
+
+```bash
+sudo "/Library/Application Support/MacScope/venv/bin/macscope" token
+```
+
+Entfernen (Verlauf in `/Library/Application Support/MacScope-Data` bleibt, mit
+`--daten-loeschen` wird er mitgelöscht):
 
 ```bash
 sudo bash install-managed.command remove
 ```
 
+Ein Verlauf aus dem früheren unverwalteten Betrieb (`~/Library/Application
+Support/MacScope/timeline.sqlite3`) wird nicht übernommen und bleibt unverändert;
+der Installer weist darauf hin.
+
 ## Bekannte Grenzen
 
-- Das **Datenverzeichnis** gehört dem Benutzer. Er kann Verlauf und Schlüssel löschen.
-  Der Agent legt beides neu an, die Lücke fällt im Dashboard auf. Ein root-eigener
-  Speicher wäre ein späterer Schritt.
+- Der Benutzer kann Verlauf und Schlüssel **nicht** mehr löschen oder ändern (#22),
+  aber über den Socket weiterhin **zusätzliche** Ereignisse eintragen oder Aufträge
+  fortschreiben und das Dashboard mit dem Schlüssel öffnen (der Agent in seinem Konto
+  braucht beides). Kein manipulationssicheres Protokoll im forensischen Sinn.
+- Hält der Benutzer den Agenten an, entsteht eine Lücke im Verlauf; der Wächter
+  startet ihn nach 2,5–3 Minuten neu (`agent.started` im Verlauf).
 - `launchctl bootout` als Benutzer entlädt den Agenten für **bis zu ~30 s**, bis der Wächter ihn nachlädt.
 - Ein angehaltener oder hängender Agent wird über das Lebenszeichen erkannt, aber erst
   nach **2,5–3 Minuten** (120 s Grenze + zwei Prüfungen à 30 s).
@@ -98,4 +124,11 @@ sudo bash install-managed.command remove
 | [ ] | Neustart, Standardbenutzer meldet sich an | Agent startet ohne Zutun |
 | [ ] | Admin-Konto anmelden (schneller Benutzerwechsel) | Dort kein Agent, kein Fehler im Protokoll |
 | [ ] | `managed.json` testweise `chmod 666` (als Admin), Agent neu starten | Agent startet **nicht**; Wächter-Protokoll meldet Konfigurationsfehler; danach `chmod 644` |
-| [ ] | `sudo bash install-managed.command remove` | Alles weg, Verlauf bleibt |
+| [ ] | Als Standardbenutzer: `ls`/`rm` in `/Library/Application Support/MacScope-Data` | Verweigert (Ordner nicht lesbar) |
+| [ ] | Als Standardbenutzer: `rm /var/run/macscope/recorder.sock` | Verweigert |
+| [ ] | Als Standardbenutzer: `launchctl bootout system/local.macscope.recorder` | Verweigert |
+| [ ] | Als Admin `sudo launchctl bootout system/local.macscope.recorder`, im Dashboard weiterklicken, nach ≤ 30 s | Dashboard kurz `503`, dann wieder normal; Ereignisse aus der Lücke sind nachgetragen; Wächter-Protokoll „Aufzeichnungsdienst … neu geladen“ |
+| [ ] | `sudo …/macscope token` und `sudo -H -u BENUTZER …/macscope token` | Beide zeigen denselben Schlüssel |
+| [ ] | Mac neu starten | Dienst läuft vor der Anmeldung (`sudo launchctl print system/local.macscope.recorder`), Agent verbindet sich nach der Anmeldung |
+| [ ] | `sudo bash install-managed.command remove` | Alles weg, Verlauf in `MacScope-Data` bleibt |
+| [ ] | `sudo bash install-managed.command remove --daten-loeschen` | Auch `MacScope-Data` weg |

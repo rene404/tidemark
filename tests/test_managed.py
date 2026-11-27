@@ -7,6 +7,7 @@ import pwd
 import subprocess
 import sys
 import tempfile
+import threading
 import types
 import unittest
 from unittest.mock import patch
@@ -14,6 +15,7 @@ from pathlib import Path
 
 from macscope import __main__ as cli, managed, watchdog
 from macscope.service import Service, ServiceError
+from macscope.recorder import RecorderServer
 from macscope.store import Store
 
 ME = pwd.getpwuid(os.getuid()).pw_name
@@ -265,8 +267,9 @@ class LoggingTests(unittest.TestCase):
                         handler.close()
 
     def test_newsyslog_rotates_watchdog_log(self):
-        line = managed.newsyslog_conf().splitlines()[-1].split("\t")
-        self.assertEqual(line, [str(managed.WATCHDOG_LOG), "root:wheel", "644", "3", "1024", "*", "N"])
+        lines = [line.split("\t") for line in managed.newsyslog_conf().splitlines()[1:]]
+        self.assertEqual(lines, [[str(managed.WATCHDOG_LOG), "root:wheel", "644", "3", "1024", "*", "N"],
+                                 [str(managed.RECORDER_LOG), "root:wheel", "600", "3", "1024", "*", "N"]])
 
 
 class ManagedServiceTests(unittest.TestCase):
@@ -284,6 +287,29 @@ class ManagedServiceTests(unittest.TestCase):
         self.assertEqual(caught.exception.status, 403)
         self.assertTrue(self.service.status()["managed"])
         self.assertFalse(self.service.status()["paused"])
+
+
+class RecorderWatchTests(unittest.TestCase):
+    def test_loads_missing_recorder_only_when_installed(self):
+        calls = []
+        def run(*args):
+            calls.append(args)
+            return result(113 if args[0] == "print" else 0)
+        with tempfile.NamedTemporaryFile() as plist:
+            self.assertIn("neu geladen", watchdog.ensure_recorder(run, Path(plist.name)))
+            self.assertEqual(calls[-1], ("bootstrap", "system", plist.name))
+        calls.clear()
+        self.assertIsNone(watchdog.ensure_recorder(run, Path("/gibt/es/nicht.plist")))
+        self.assertEqual(calls, [])
+
+    def test_loaded_recorder_is_left_alone(self):
+        calls = []
+        def run(*args):
+            calls.append(args)
+            return result(0)
+        with tempfile.NamedTemporaryFile() as plist:
+            self.assertIsNone(watchdog.ensure_recorder(run, Path(plist.name)))
+        self.assertEqual(calls, [("print", f"system/{managed.RECORDER_LABEL}")])
 
 
 class ManagedStartTests(unittest.TestCase):
@@ -319,18 +345,43 @@ class ManagedStartTests(unittest.TestCase):
 
     def test_target_account_runs_managed_and_exits_for_restart(self):
         calls = []
-        with tempfile.TemporaryDirectory() as temp:
+        with tempfile.TemporaryDirectory(dir="/tmp") as temp:
+            store = Store(Path(temp) / "root-data", 14)
+            server = RecorderServer(Path(temp) / "r.sock", store, lambda: "t" * 40, {os.getuid()})
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
             fake_platform = types.SimpleNamespace(run=lambda service, port, managed=False: calls.append(
                 (service.managed, service.allowed_bundles, port, managed)))
             config = managed.ManagedConfig(ME, ("com.apple.TextEdit",), 14, 8799)
             with patch.object(sys, "argv", ["macscope", "run", "--data-dir", temp + "/d", "--allow-app", "x.y"]), \
                  patch.object(sys, "platform", "darwin"), \
                  patch.dict(sys.modules, {"macscope.platform_macos": fake_platform}), \
-                 patch.object(cli.managed_config, "load", return_value=config), patch("builtins.print"):
+                 patch.object(cli.managed_config, "load", return_value=config), patch("builtins.print"), \
+                 patch.object(cli.managed_config, "RECORDER_SOCKET", Path(temp) / "r.sock"):
                 with self.assertRaises(SystemExit) as caught:
                     cli.main()
+            kinds = [e["kind"] for e in store.events(limit=10)["events"]]
+            self.assertFalse((Path(temp) / "d" / "timeline.sqlite3").exists())
+            self.assertFalse((Path(temp) / "d" / "access-token").exists())
         self.assertEqual(caught.exception.code, managed.EXIT_RESTART)
         self.assertEqual(calls, [(True, frozenset({"com.apple.TextEdit"}), 8799, True)])
+        self.assertEqual(kinds, ["agent.stopped", "agent.started"])
+
+    def test_managed_start_without_recorder_exits_for_restart(self):
+        config = managed.ManagedConfig(ME, ("com.apple.TextEdit",), 14, 8799)
+        with tempfile.TemporaryDirectory(dir="/tmp") as temp, \
+             patch.object(sys, "argv", ["macscope", "run", "--data-dir", temp + "/d"]), \
+             patch.object(sys, "platform", "darwin"), \
+             patch.dict(sys.modules, {"macscope.platform_macos": types.SimpleNamespace(
+                 run=lambda *a, **k: self.fail("Agent darf nicht starten"))}), \
+             patch.object(cli.managed_config, "load", return_value=config), patch("builtins.print"), \
+             patch.object(cli.managed_config, "RECORDER_SOCKET", Path(temp) / "fehlt.sock"), \
+             patch.object(cli.RemoteStore, "wait", side_effect=cli.RecorderUnavailable()), \
+             self.assertLogs(level="ERROR"):
+            with self.assertRaises(SystemExit) as caught:
+                cli.main()
+        self.assertEqual(caught.exception.code, managed.EXIT_RESTART)
 
 
 if __name__ == "__main__":

@@ -129,9 +129,12 @@ class Service:
             return command_id
 
     def _finish(self, command_id, target, status, message):
-        self.store.set_command(command_id, status, message)
-        with self._lock:
-            self._inflight.discard((target["pid"], target["bundle_id"], target["launched_at"]))
+        try:
+            self.store.set_command(command_id, status, message)
+        finally:
+            # Auch wenn der Aufzeichnungsdienst gerade fehlt: App nicht dauerhaft blockieren.
+            with self._lock:
+                self._inflight.discard((target["pid"], target["bundle_id"], target["launched_at"]))
 
     def beat(self):
         """Lebenszeichen für den root-Wächter (mtime der Datei). Hängt der Hauptthread,
@@ -208,5 +211,8 @@ class Service:
         with self._lock:
             if not self._closed:
                 self._closed = True
-                self.store.recover_commands("Agent beendet; Auftrag wird nicht wiederholt.")
+                try:
+                    self.store.recover_commands("Agent beendet; Auftrag wird nicht wiederholt.")
+                except ServiceError as error:
+                    logging.getLogger(__name__).warning("Aufträge beim Beenden nicht abgeschlossen: %s", error)
                 self.store.event("agent.stopped")
