@@ -99,11 +99,12 @@ def install(args):
     APP.mkdir()
     for name in ["macscope", "scripts", "docs"]:
         shutil.copytree(ROOT / name, APP / name, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-    for name in ["pyproject.toml", "README.md"]:
+    for name in ["pyproject.toml", "constraints.txt", "README.md"]:
         shutil.copy2(ROOT / name, APP / name)
     if not PYTHON.exists():
         subprocess.run([sys.executable, "-m", "venv", str(VENV)], check=True)
-    subprocess.run([str(PYTHON), "-m", "pip", "install", "--quiet", "--upgrade", str(APP)], check=True)
+    subprocess.run([str(PYTHON), "-m", "pip", "install", "--quiet", "--upgrade",
+                    "-c", str(APP / "constraints.txt"), str(APP)], check=True)
     lock_down(managed.SYSTEM_DIRECTORY)
     managed.SYSTEM_DIRECTORY.chmod(0o755)
 

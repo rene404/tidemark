@@ -1,0 +1,5 @@
+# Geprüfte Versionen für Installer und CI (pip install -c constraints.txt …).
+# PyObjC-Pakete immer aus derselben Version. Universal2-Wheels: Intel und Apple Silicon.
+# Ermittelt 2026-11-27 auf macOS 26.6.2 (arm64), Python 3.11 und 3.13; Abgleich am Test-Mac: #10.
+pyobjc-core==12.2.2
+pyobjc-framework-Cocoa==12.2.2

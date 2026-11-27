@@ -34,7 +34,8 @@ jobs:
       - name: Paket mit PyObjC installieren, AppKit-Modul importieren
         run: |
           python -m venv .venv
-          .venv/bin/python -m pip install --quiet .
+          .venv/bin/python -m pip install --quiet -c constraints.txt .
+          .venv/bin/python -m pip check
           .venv/bin/python -c "import macscope.platform_macos"
           .venv/bin/macscope diagnose
 

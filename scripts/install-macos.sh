@@ -44,13 +44,13 @@ if source != destination:
     for name in ['macscope', 'scripts', 'docs']:
         shutil.copytree(source / name, destination / name, dirs_exist_ok=True,
                         ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
-    for name in ['pyproject.toml', 'README.md', 'install.command', 'start.command']:
+    for name in ['pyproject.toml', 'constraints.txt', 'README.md', 'install.command', 'start.command']:
         shutil.copy2(source / name, destination / name)
 PY
 if [ ! -x "$MACSCOPE_INSTALL/.venv/bin/python" ]; then
   "$MACSCOPE_PYTHON" -m venv "$MACSCOPE_INSTALL/.venv"
 fi
-"$MACSCOPE_INSTALL/.venv/bin/python" -m pip install "$MACSCOPE_INSTALL"
+"$MACSCOPE_INSTALL/.venv/bin/python" -m pip install -c "$MACSCOPE_INSTALL/constraints.txt" "$MACSCOPE_INSTALL"
 "$MACSCOPE_INSTALL/.venv/bin/python" -m macscope diagnose
 echo "Installiert: $MACSCOPE_INSTALL"
 if [ "$MACSCOPE_AUTOSTART" = "yes" ]; then
