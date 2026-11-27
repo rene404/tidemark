@@ -40,6 +40,7 @@ Möglichst **im Standardbenutzer-Konto** (nicht Admin), so wie später beim Vate
 | 7 | Während des Dauertests Bildschirm sperren, später entsperren | Was steht in den Protokollzeilen dieser Zeit (Fehler, schwarzes Bild, normal)? |
 | 8 | Schneller Benutzerwechsel ins Admin-Konto | Was protokolliert der Test im Hintergrund? |
 | 9 | Neu bauen (`build.sh`), cdhash vergleichen, dann `open … --args status` | Ist `screen_capture` noch `true`, oder ist die Freigabe weg bzw. doppelt in der Liste? |
+| 9b | Mit eigenem Zertifikat wiederholen (siehe [CODE-SIGNATUR.md](../../docs/CODE-SIGNATUR.md)): `SIGN_IDENTITY="tidemark lokal" bash tools/capture-probe/build.sh`, Freigabe erteilen, neu bauen, `status` | Bleibt `screen_capture: true` über den Neubau? Liefert `status` überhaupt `true`? (Es gibt Berichte, dass ad hoc signierte Programme unter neueren macOS-Versionen nie `true` melden) |
 | 10 | Für B2: `open … --args request`, Bedienungshilfen freigeben, `status` | `accessibility: true`? Admin-Passwort nötig? Übersteht es den Neubau? |
 
 Beenden: `bash tools/capture-probe/agent.sh remove`. Freigaben in den
