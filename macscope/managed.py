@@ -15,6 +15,8 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path
 
+from .viewer import valid_host
+
 SYSTEM_DIRECTORY = Path("/Library/Application Support/MacScope")
 CONFIG_PATH = SYSTEM_DIRECTORY / "managed.json"
 AGENT_LABEL = "local.macscope.managed-agent"
@@ -24,7 +26,7 @@ WATCHDOG_PLIST = Path("/Library/LaunchDaemons") / (WATCHDOG_LABEL + ".plist")
 # Exit code for "verwalteter Agent wurde beendet": launchd startet ihn neu.
 EXIT_RESTART = 75
 
-_KEYS = {"target_user", "allow_apps", "retention_days", "port"}
+_KEYS = {"target_user", "allow_apps", "retention_days", "port", "viewer_host"}
 
 
 class ManagedConfigError(Exception):
@@ -37,6 +39,7 @@ class ManagedConfig:
     allow_apps: tuple = ("org.mozilla.firefox",)
     retention_days: int = 30
     port: int = 8765
+    viewer_host: str | None = None
 
 
 def _check_secure(path: Path, owner: int):
@@ -81,7 +84,10 @@ def parse(data) -> ManagedConfig:
     port = data.get("port", 8765)
     if type(port) is not int or not 1024 <= port <= 65535:
         raise ManagedConfigError("port muss 1024–65535 sein.")
-    return ManagedConfig(user, tuple(apps), retention, port)
+    host = data.get("viewer_host")
+    if host is not None and not valid_host(host):
+        raise ManagedConfigError("viewer_host muss ein Hostname oder eine IP sein (Tailscale-Name).")
+    return ManagedConfig(user, tuple(apps), retention, port, host)
 
 
 def load(path: Path = CONFIG_PATH, owner: int = 0):

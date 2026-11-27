@@ -9,6 +9,7 @@ import time
 
 from . import __version__
 from .store import Store
+from .viewer import MODES, NoBackend
 
 
 class ServiceError(Exception):
@@ -18,11 +19,12 @@ class ServiceError(Exception):
 
 
 class Service:
-    def __init__(self, store: Store, allowed_bundles=None, demo=False, managed=False):
+    def __init__(self, store: Store, allowed_bundles=None, demo=False, managed=False, viewer=None):
         self.store = store
         self.allowed_bundles = frozenset({"org.mozilla.firefox"} if allowed_bundles is None else allowed_bundles)
         self.demo = demo
         self.managed = managed
+        self.viewer = viewer or NoBackend()
         self.started_at = time.time()
         self._lock = threading.RLock()
         self._apps = []
@@ -76,6 +78,27 @@ class Service:
             self._paused = not self._paused
             self.store.event("recording.paused" if self._paused else "recording.resumed")
             return self._paused
+
+    def viewer_status(self):
+        return self.viewer.capabilities()
+
+    def open_viewer(self, mode):
+        """Live-Bild anfragen. Jede Anfrage wird protokolliert, auch während einer Pause."""
+        if mode not in MODES:
+            raise ServiceError("Ungültiger Modus.", 400)
+        if self._closed:
+            raise ServiceError("Der Agent wird gerade beendet.", 503)
+        capabilities = self.viewer.capabilities()
+        details = {"backend": capabilities["backend"], "mode": mode}
+        if not capabilities["available"]:
+            self.store.event("viewer.refused", details={**details, "message": capabilities["reason"]})
+            raise ServiceError(capabilities["reason"], 409)
+        descriptor = self.viewer.open_session(mode)
+        label = "Steuern" if mode == "control" else "Ansehen"
+        message = (f"Live-Bild angefragt ({label})" if capabilities["modes_enforced"]
+                   else "Live-Bild angefragt (Modus wird in der Bildschirmfreigabe gewählt)")
+        self.store.event("viewer.requested", details={**details, "message": message})
+        return descriptor
 
     def request_quit(self, pid, bundle_id, launched_at):
         with self._lock:
