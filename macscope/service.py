@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import copy
+import logging
+import os
 import platform
 import queue
 import threading
@@ -19,12 +21,17 @@ class ServiceError(Exception):
 
 
 class Service:
-    def __init__(self, store: Store, allowed_bundles=None, demo=False, managed=False, viewer=None):
+    def __init__(self, store: Store, allowed_bundles=None, demo=False, managed=False, viewer=None,
+                 heartbeat_path=None, heartbeat_interval=10):
         self.store = store
         self.allowed_bundles = frozenset({"org.mozilla.firefox"} if allowed_bundles is None else allowed_bundles)
         self.demo = demo
         self.managed = managed
         self.viewer = viewer or NoBackend()
+        self.heartbeat_path = heartbeat_path
+        self._heartbeat_interval = heartbeat_interval
+        self._last_beat = None
+        self._beat_failed = False
         self.started_at = time.time()
         self._lock = threading.RLock()
         self._apps = []
@@ -126,8 +133,30 @@ class Service:
         with self._lock:
             self._inflight.discard((target["pid"], target["bundle_id"], target["launched_at"]))
 
+    def beat(self):
+        """Lebenszeichen für den root-Wächter (mtime der Datei). Hängt der Hauptthread,
+        bleibt es aus, und der Wächter startet den Agenten neu."""
+        if not self.heartbeat_path:
+            return
+        now = time.monotonic()
+        if self._last_beat is not None and now - self._last_beat < self._heartbeat_interval:
+            return
+        self._last_beat = now
+        try:
+            fd = os.open(self.heartbeat_path, os.O_CREAT | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            try:
+                os.utime(fd)
+            finally:
+                os.close(fd)
+            self._beat_failed = False
+        except OSError as error:
+            if not self._beat_failed:
+                logging.getLogger(__name__).warning("Lebenszeichen nicht schreibbar: %s", error)
+            self._beat_failed = True
+
     def tick(self, adapter):
         """Must be called on the AppKit main thread. adapter.quit rechecks live identity."""
+        self.beat()
         while True:
             try:
                 command_id, target, queued_at = self._queue.get_nowait()

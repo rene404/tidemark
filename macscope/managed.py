@@ -23,6 +23,13 @@ AGENT_LABEL = "local.macscope.managed-agent"
 WATCHDOG_LABEL = "local.macscope.watchdog"
 AGENT_PLIST = Path("/Library/LaunchAgents") / (AGENT_LABEL + ".plist")
 WATCHDOG_PLIST = Path("/Library/LaunchDaemons") / (WATCHDOG_LABEL + ".plist")
+WATCHDOG_STATE = SYSTEM_DIRECTORY / "watchdog-state.json"
+NEWSYSLOG_CONF = Path("/etc/newsyslog.d/macscope.conf")
+WATCHDOG_LOG = Path("/Library/Logs/MacScope-watchdog.log")
+# Lebenszeichen des Agenten im Datenverzeichnis des Benutzers (Datei-mtime).
+HEARTBEAT_NAME = "heartbeat"
+HEARTBEAT_INTERVAL = 10
+HEARTBEAT_STALE_AFTER = 120
 # Exit code for "verwalteter Agent wurde beendet": launchd startet ihn neu.
 EXIT_RESTART = 75
 
@@ -124,7 +131,16 @@ def watchdog_plist(python: Path, interval: int = 30) -> bytes:
         "ProgramArguments": [str(python), "-I", "-m", "macscope.watchdog"],
         "RunAtLoad": True,
         "StartInterval": interval,
-        "StandardOutPath": "/Library/Logs/MacScope-watchdog.log",
-        "StandardErrorPath": "/Library/Logs/MacScope-watchdog.log",
+        "StandardOutPath": str(WATCHDOG_LOG),
+        "StandardErrorPath": str(WATCHDOG_LOG),
         "Umask": 0o022,
     })
+
+
+def user_data_directory(home) -> Path:
+    return Path(home) / "Library" / "Application Support" / "MacScope"
+
+
+def newsyslog_conf() -> str:
+    """Rotation des Wächter-Protokolls: 3 Generationen, ab 1 MB, ohne Signal."""
+    return f"# MacScope (tidemark)\n{WATCHDOG_LOG}\troot:wheel\t644\t3\t1024\t*\tN\n"

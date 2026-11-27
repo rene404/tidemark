@@ -1,5 +1,6 @@
 import json
 import logging
+import logging.handlers
 import os
 import plistlib
 import pwd
@@ -118,41 +119,154 @@ class FakeLaunchctl:
         if args[0] == "print" and "/" + managed.AGENT_LABEL not in args[1]:
             return result(0 if self.logged_in else 113)
         if args[0] == "print":
-            return result(0, "state = running" if self.running else "state = not running") if self.loaded else result(113)
+            state = "state = running\n\tpid = 4242" if self.running else "state = not running"
+            return result(0, state) if self.loaded else result(113)
         return result(1 if self.fail else 0)
+
+
+FRESH = lambda home: 5.0  # noqa: E731
 
 
 class WatchdogTests(unittest.TestCase):
     config = managed.ManagedConfig(ME)
 
+    def check(self, fake, **kwargs):
+        kwargs.setdefault("heartbeat", FRESH)
+        return watchdog.check(self.config, fake, **kwargs)
+
     def test_nothing_when_user_not_logged_in(self):
         fake = FakeLaunchctl(logged_in=False)
-        self.assertIsNone(watchdog.check(self.config, fake))
+        self.assertIsNone(self.check(fake))
         self.assertEqual(len(fake.calls), 1)
 
     def test_nothing_when_agent_running(self):
         fake = FakeLaunchctl()
-        self.assertIsNone(watchdog.check(self.config, fake))
+        self.assertIsNone(self.check(fake))
         self.assertFalse([c for c in fake.calls if c[0] != "print"])
 
     def test_unloaded_agent_is_bootstrapped(self):
         fake = FakeLaunchctl(loaded=False)
-        self.assertIn("nachgeladen", watchdog.check(self.config, fake, Path("/L/a.plist")))
+        self.assertIn("nachgeladen", self.check(fake, agent_plist=Path("/L/a.plist")))
         self.assertEqual(fake.calls[-1], ("bootstrap", f"gui/{os.getuid()}", "/L/a.plist"))
 
     def test_stopped_agent_is_kickstarted(self):
         fake = FakeLaunchctl(running=False)
-        self.assertIn("gestartet", watchdog.check(self.config, fake))
+        self.assertIn("gestartet", self.check(fake))
         self.assertEqual(fake.calls[-1], ("kickstart", f"gui/{os.getuid()}/{managed.AGENT_LABEL}"))
 
     def test_failures_are_reported(self):
-        self.assertIn("fehlgeschlagen", watchdog.check(self.config, FakeLaunchctl(loaded=False, fail=True)))
-        self.assertIn("fehlgeschlagen", watchdog.check(self.config, FakeLaunchctl(running=False, fail=True)))
+        self.assertIn("fehlgeschlagen", self.check(FakeLaunchctl(loaded=False, fail=True)))
+        self.assertIn("fehlgeschlagen", self.check(FakeLaunchctl(running=False, fail=True)))
 
     def test_unknown_user_is_reported(self):
         fake = FakeLaunchctl()
         self.assertIn("existiert nicht", watchdog.check(managed.ManagedConfig("gibt-es-nicht-xyz"), fake))
         self.assertEqual(fake.calls, [])
+
+    def test_stale_heartbeat_needs_two_consecutive_checks(self):
+        state, resumed = {}, []
+        stale = lambda home: 600.0  # noqa: E731
+        fake = FakeLaunchctl()
+        self.assertIsNone(self.check(fake, state=state, heartbeat=stale, resume=resumed.append))
+        self.assertTrue(state["stale"])
+        self.assertFalse([c for c in fake.calls if c[0] == "kickstart"])
+        message = self.check(fake, state=state, heartbeat=stale, resume=resumed.append)
+        self.assertIn("seit 600 s veraltet", message)
+        self.assertEqual(resumed, [4242])
+        self.assertEqual(fake.calls[-1], ("kickstart", "-k", f"gui/{os.getuid()}/{managed.AGENT_LABEL}"))
+        self.assertEqual(state, {})
+
+    def test_heartbeat_recovering_after_wake_does_not_restart(self):
+        state, fake = {}, FakeLaunchctl()
+        self.check(fake, state=state, heartbeat=lambda home: 3600.0)
+        self.assertIsNone(self.check(fake, state=state, heartbeat=FRESH))
+        self.assertEqual(state, {})
+        self.assertFalse([c for c in fake.calls if c[0] == "kickstart"])
+
+    def test_missing_heartbeat_restarts_on_second_check(self):
+        state, fake = {}, FakeLaunchctl()
+        missing = lambda home: None  # noqa: E731
+        self.assertIsNone(self.check(fake, state=state, heartbeat=missing, resume=lambda pid: None))
+        self.assertIn("fehlt", self.check(fake, state=state, heartbeat=missing, resume=lambda pid: None))
+
+    def test_unloaded_or_stopped_agent_resets_stale_state(self):
+        for fake in [FakeLaunchctl(loaded=False), FakeLaunchctl(running=False), FakeLaunchctl(logged_in=False)]:
+            state = {"stale": True}
+            self.check(fake, state=state)
+            self.assertEqual(state, {})
+
+    def test_heartbeat_age_reads_mtime_without_following_links(self):
+        with tempfile.TemporaryDirectory() as home:
+            self.assertIsNone(watchdog.heartbeat_age(home))
+            directory = managed.user_data_directory(home)
+            directory.mkdir(parents=True)
+            beat = directory / managed.HEARTBEAT_NAME
+            beat.touch()
+            os.utime(beat, (1000, 1000))
+            self.assertEqual(watchdog.heartbeat_age(home, now=lambda: 1300), 300)
+
+
+class HeartbeatTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.directory = Path(self.temp.name)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_beat_creates_private_file_and_respects_interval(self):
+        path = self.directory / "heartbeat"
+        service = Service(Store(self.directory / "state"), managed=True, heartbeat_path=path, heartbeat_interval=60)
+        service.beat()
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        os.utime(path, (1000, 1000))
+        service.beat()  # innerhalb des Intervalls: keine Aktualisierung
+        self.assertEqual(path.stat().st_mtime, 1000)
+        service._last_beat -= 61
+        service.beat()
+        self.assertGreater(path.stat().st_mtime, 1000)
+        service.close()
+
+    def test_symlinked_heartbeat_is_not_followed(self):
+        target = self.directory / "elsewhere"
+        target.write_text("x")
+        os.utime(target, (1000, 1000))
+        path = self.directory / "heartbeat"
+        path.symlink_to(target)
+        service = Service(Store(self.directory / "state"), managed=True, heartbeat_path=path)
+        with self.assertLogs("macscope.service", level="WARNING"):
+            service.beat()
+        self.assertEqual(target.stat().st_mtime, 1000)
+        service.close()
+
+    def test_unmanaged_service_writes_no_heartbeat(self):
+        service = Service(Store(self.directory / "state"))
+        service.beat()
+        self.assertFalse((self.directory / "heartbeat").exists())
+        service.close()
+
+
+class LoggingTests(unittest.TestCase):
+    def test_rotating_log_in_data_directory(self):
+        root = logging.getLogger()
+        before = list(root.handlers)
+        with tempfile.TemporaryDirectory() as temp:
+            try:
+                cli.configure_logging(Path(temp))
+                added = [h for h in root.handlers if h not in before]
+                rotating = [h for h in added if isinstance(h, logging.handlers.RotatingFileHandler)]
+                self.assertEqual(len(rotating), 1)
+                self.assertEqual((rotating[0].maxBytes, rotating[0].backupCount), (1_000_000, 3))
+                self.assertTrue((Path(temp) / "logs" / "agent.log").exists())
+            finally:
+                for handler in root.handlers[:]:
+                    if handler not in before:
+                        root.removeHandler(handler)
+                        handler.close()
+
+    def test_newsyslog_rotates_watchdog_log(self):
+        line = managed.newsyslog_conf().splitlines()[-1].split("\t")
+        self.assertEqual(line, [str(managed.WATCHDOG_LOG), "root:wheel", "644", "3", "1024", "*", "N"])
 
 
 class ManagedServiceTests(unittest.TestCase):

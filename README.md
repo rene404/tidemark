@@ -58,7 +58,7 @@ flowchart LR
 | Live screen | Opens Apple Screen Sharing over Tailscale; every request is logged in the timeline |
 | Search | By app / bundle ID and event type, paging into older entries |
 | Retention | 30 days by default, pruned at start and hourly |
-| Managed mode | No pause / quit in the menu bar, settings only from a root-owned file, automatic restart, root watchdog |
+| Managed mode | No pause / quit in the menu bar, settings only from a root-owned file, automatic restart, root watchdog that also detects a hung or stopped agent |
 | Access | Loopback only, access token, host and origin checks, strict CSP |
 
 **Not collected:** browser URLs, window titles, file contents or changes,
@@ -174,7 +174,8 @@ the values come from `/Library/Application Support/MacScope/managed.json`.
   access-token        access token, mode 0600
   timeline.sqlite3    events and action log
   agent.lock          prevents two agents on the same data directory
-  logs/               agent / autostart logs
+  logs/               agent log (rotated at 1 MB, 3 generations)
+  heartbeat           liveness file for the root watchdog (managed mode)
 ```
 
 - The database is **not encrypted at application level**. Enable FileVault on

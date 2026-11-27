@@ -4,6 +4,7 @@ import argparse
 import fcntl
 import json
 import logging
+import logging.handlers
 import os
 import platform
 import pwd
@@ -17,6 +18,23 @@ from . import viewer
 from .service import Service
 from .server import make_server
 from .store import Store, load_token, private_directory
+
+
+def configure_logging(directory: Path):
+    """Protokoll ins Datenverzeichnis mit Rotation (1 MB, 3 Generationen).
+    Auf die Konsole nur bei interaktivem Start; unter launchd wächst stderr.log so nicht mit."""
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    private_directory(directory / "logs")
+    handler = logging.handlers.RotatingFileHandler(directory / "logs" / "agent.log",
+                                                   maxBytes=1_000_000, backupCount=3)
+    handler.setFormatter(formatter)
+    root.addHandler(handler)
+    if sys.stderr.isatty():
+        console = logging.StreamHandler()
+        console.setFormatter(formatter)
+        root.addHandler(console)
 
 
 def main():
@@ -82,18 +100,14 @@ def main():
     except BlockingIOError:
         os.close(lock_fd)
         parser.error("In diesem Datenverzeichnis läuft bereits ein MacScope-Agent.")
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    if managed:
-        # /Library/LaunchAgents kennt kein ~; Protokoll daher selbst ins Datenverzeichnis.
-        private_directory(directory / "logs")
-        handler = logging.FileHandler(directory / "logs" / "agent.log")
-        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-        logging.getLogger().addHandler(handler)
+    configure_logging(directory)
     store = Store(directory, args.retention_days)
     token = load_token(directory)
     allowed = set(managed.allow_apps) if managed else {"org.mozilla.firefox", *args.allow_app}
     backend = viewer.DemoBackend() if args.demo else viewer.AppleBackend(args.viewer_host)
-    service = Service(store, allowed_bundles=allowed, demo=args.demo, managed=bool(managed), viewer=backend)
+    heartbeat = directory / managed_config.HEARTBEAT_NAME if managed else None
+    service = Service(store, allowed_bundles=allowed, demo=args.demo, managed=bool(managed), viewer=backend,
+                      heartbeat_path=heartbeat, heartbeat_interval=managed_config.HEARTBEAT_INTERVAL)
     server = None
     try:
         server = make_server(service, token, args.port)
