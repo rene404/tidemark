@@ -75,6 +75,7 @@ def main():
                 page.locator("#dashboard").wait_for(state="visible")
                 page.locator("#apps .app").first.wait_for()
                 assert page.locator("#demo").is_visible()
+                page.wait_for_function("document.querySelector('#version').textContent.startsWith('LOCAL / ')")
                 assert not page.locator("#token").input_value()
                 assert page.evaluate("localStorage.length") == 0
                 assert page.evaluate("sessionStorage.length") == 0

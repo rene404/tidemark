@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "macscope-local"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local macOS application timeline and SSH-accessible controls"
 requires-python = ">=3.11,<3.15"
 dependencies = ["pyobjc-framework-Cocoa>=11.1,<13; sys_platform == 'darwin'"]
