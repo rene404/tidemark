@@ -4,6 +4,7 @@ Läuft als LaunchDaemon alle 30 Sekunden (``StartInterval``), prüft einmal und
 beendet sich. Er kann den Agenten nicht selbst *sein* — AppKit sieht nur die
 eigene GUI-Sitzung —, sondern lädt bzw. startet den LaunchAgent dort nach,
 falls der Benutzer ihn per ``launchctl bootout`` oder Prozess-Beenden entfernt hat.
+Außerdem lädt er den Aufzeichnungsdienst (root) nach, falls er fehlt.
 """
 from __future__ import annotations
 
@@ -37,6 +38,18 @@ def heartbeat_age(home, now=time.time):
 def _pid(output):
     match = re.search(r"^\s*pid = (\d+)$", output, re.MULTILINE)
     return int(match.group(1)) if match else None
+
+
+def ensure_recorder(run=_launchctl, plist=managed.RECORDER_PLIST):
+    """Aufzeichnungsdienst nachladen, falls jemand ihn entladen hat (nur root kann das)."""
+    if not os.path.exists(plist):
+        return None
+    if run("print", f"system/{managed.RECORDER_LABEL}").returncode == 0:
+        return None
+    result = run("bootstrap", "system", str(plist))
+    if result.returncode == 0:
+        return "Aufzeichnungsdienst war nicht geladen, neu geladen."
+    return f"Aufzeichnungsdienst nicht ladbar: {result.stderr.strip()}"
 
 
 def check(config, run=_launchctl, agent_plist=managed.AGENT_PLIST, state=None,
@@ -121,9 +134,9 @@ def main():
     if config is None:
         return  # nicht verwaltet: Wächter ist untätig
     state = _load_state(managed.WATCHDOG_STATE)
-    message = check(config, state=state)
+    messages = [ensure_recorder(), check(config, state=state)]
     _save_state(managed.WATCHDOG_STATE, state)
-    if message:
+    for message in filter(None, messages):
         print(time.strftime("%Y-%m-%d %H:%M:%S"), message, flush=True)
 
 

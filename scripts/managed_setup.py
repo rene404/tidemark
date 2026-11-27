@@ -1,8 +1,10 @@
 """Verwalteten Modus einrichten/entfernen (als root, über install-managed.command).
 
 install: Programm nach /Library/Application Support/MacScope (gehört root),
-         managed.json schreiben, systemweiten LaunchAgent + root-Wächter laden.
-remove:  alles davon wieder entfernen; Verlaufsdaten des Benutzers bleiben.
+         managed.json schreiben, Aufzeichnungsdienst (root), systemweiten
+         LaunchAgent + root-Wächter laden.
+remove:  alles davon wieder entfernen; Verlaufsdaten in
+         /Library/Application Support/MacScope-Data bleiben (--daten-loeschen entfernt sie).
 """
 import argparse
 import grp
@@ -114,9 +116,13 @@ def install(args):
     managed.load()  # Selbstprüfung: Besitz/Rechte so, wie der Agent sie verlangt
 
     remove_old_user_agent(account)
+    write_root_file(managed.RECORDER_PLIST, managed.recorder_plist(PYTHON))
     write_root_file(managed.AGENT_PLIST, managed.agent_plist(PYTHON))
     write_root_file(managed.WATCHDOG_PLIST, managed.watchdog_plist(PYTHON))
     write_root_file(managed.NEWSYSLOG_CONF, managed.newsyslog_conf().encode())
+    # Erst den Aufzeichnungsdienst, damit der Agent ihn beim Start erreicht.
+    launchctl("bootout", f"system/{managed.RECORDER_LABEL}")
+    launchctl("bootstrap", "system", str(managed.RECORDER_PLIST), check=True)
     launchctl("bootout", f"system/{managed.WATCHDOG_LABEL}")
     launchctl("bootstrap", "system", str(managed.WATCHDOG_PLIST), check=True)
     if logged_in(account.pw_uid):
@@ -125,7 +131,11 @@ def install(args):
         print(f"Agent in der laufenden Sitzung von {args.user} gestartet.")
     else:
         print(f"Agent startet bei der nächsten Anmeldung von {args.user}.")
-    print("Verwalteter Modus eingerichtet. Wächter-Protokoll: /Library/Logs/MacScope-watchdog.log")
+    old_data = managed.user_data_directory(account.pw_dir) / "timeline.sqlite3"
+    if old_data.exists():
+        print(f"Hinweis: Alter Verlauf aus dem unverwalteten Betrieb bleibt unverändert in {old_data.parent}.")
+    print(f"Verwalteter Modus eingerichtet. Verlauf: {managed.DATA_DIRECTORY} (nur root).")
+    print(f"Protokolle: {managed.WATCHDOG_LOG}, {managed.RECORDER_LOG}")
 
 
 def remove(args):
@@ -139,11 +149,18 @@ def remove(args):
             launchctl("bootout", f"gui/{pwd.getpwnam(config.target_user).pw_uid}/{managed.AGENT_LABEL}")
         except KeyError:
             pass
-    for path in [managed.WATCHDOG_PLIST, managed.AGENT_PLIST, managed.NEWSYSLOG_CONF]:
+    launchctl("bootout", f"system/{managed.RECORDER_LABEL}")
+    for path in [managed.WATCHDOG_PLIST, managed.RECORDER_PLIST, managed.AGENT_PLIST, managed.NEWSYSLOG_CONF,
+                 managed.RECORDER_SOCKET]:
         path.unlink(missing_ok=True)
     if managed.SYSTEM_DIRECTORY.exists():
         shutil.rmtree(managed.SYSTEM_DIRECTORY)
-    print("Verwalteter Modus entfernt. Verlaufsdaten im Benutzerkonto bleiben erhalten.")
+    if args.daten_loeschen and managed.DATA_DIRECTORY.exists():
+        shutil.rmtree(managed.DATA_DIRECTORY)
+        print(f"Verlaufsdaten gelöscht: {managed.DATA_DIRECTORY}")
+    elif managed.DATA_DIRECTORY.exists():
+        print(f"Verlaufsdaten bleiben in {managed.DATA_DIRECTORY} (löschen: remove --daten-loeschen).")
+    print("Verwalteter Modus entfernt.")
 
 
 def main():
@@ -157,7 +174,9 @@ def main():
     setup.add_argument("--retention-days", type=int, default=30)
     setup.add_argument("--viewer-host", help="Tailscale-Name dieses Macs für das Live-Bild")
     setup.add_argument("--erlaube-admin", action="store_true", help="Nur für Tests")
-    commands.add_parser("remove")
+    teardown = commands.add_parser("remove")
+    teardown.add_argument("--daten-loeschen", action="store_true",
+                          help="Auch den Verlauf und den Zugriffsschlüssel löschen")
     args = parser.parse_args()
     if args.command == "install":
         install(args)

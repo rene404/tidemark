@@ -26,6 +26,14 @@ WATCHDOG_PLIST = Path("/Library/LaunchDaemons") / (WATCHDOG_LABEL + ".plist")
 WATCHDOG_STATE = SYSTEM_DIRECTORY / "watchdog-state.json"
 NEWSYSLOG_CONF = Path("/etc/newsyslog.d/macscope.conf")
 WATCHDOG_LOG = Path("/Library/Logs/MacScope-watchdog.log")
+# Aufzeichnungsdienst (root, #22): besitzt Verlauf und Zugriffsschlüssel. Die Daten liegen
+# bewusst außerhalb von SYSTEM_DIRECTORY, damit „remove“ sie nicht mitlöscht.
+RECORDER_LABEL = "local.macscope.recorder"
+RECORDER_PLIST = Path("/Library/LaunchDaemons") / (RECORDER_LABEL + ".plist")
+RECORDER_LOG = Path("/Library/Logs/MacScope-recorder.log")
+DATA_DIRECTORY = Path("/Library/Application Support/MacScope-Data")
+RUN_DIRECTORY = Path("/var/run/macscope")
+RECORDER_SOCKET = RUN_DIRECTORY / "recorder.sock"
 # Lebenszeichen des Agenten im Datenverzeichnis des Benutzers (Datei-mtime).
 HEARTBEAT_NAME = "heartbeat"
 HEARTBEAT_INTERVAL = 10
@@ -137,10 +145,25 @@ def watchdog_plist(python: Path, interval: int = 30) -> bytes:
     })
 
 
+def recorder_plist(python: Path) -> bytes:
+    """LaunchDaemon (root), läuft dauerhaft und hält die Verlaufsdatenbank."""
+    return plistlib.dumps({
+        "Label": RECORDER_LABEL,
+        "ProgramArguments": [str(python), "-I", "-m", "macscope.recorder"],
+        "RunAtLoad": True,
+        "KeepAlive": {"SuccessfulExit": False},
+        "ThrottleInterval": 10,
+        "StandardOutPath": str(RECORDER_LOG),
+        "StandardErrorPath": str(RECORDER_LOG),
+        "Umask": 0o077,
+    })
+
+
 def user_data_directory(home) -> Path:
     return Path(home) / "Library" / "Application Support" / "MacScope"
 
 
 def newsyslog_conf() -> str:
     """Rotation des Wächter-Protokolls: 3 Generationen, ab 1 MB, ohne Signal."""
-    return f"# MacScope (tidemark)\n{WATCHDOG_LOG}\troot:wheel\t644\t3\t1024\t*\tN\n"
+    return (f"# MacScope (tidemark)\n{WATCHDOG_LOG}\troot:wheel\t644\t3\t1024\t*\tN\n"
+            f"{RECORDER_LOG}\troot:wheel\t600\t3\t1024\t*\tN\n")

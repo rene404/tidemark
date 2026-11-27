@@ -16,6 +16,7 @@ from pathlib import Path
 from . import managed as managed_config
 from . import viewer
 from .service import Service
+from .recorder import RecorderUnavailable, RemoteStore
 from .server import make_server
 from .store import Store, load_token, private_directory
 
@@ -51,15 +52,32 @@ def main():
         try:
             config = managed_config.load()
             mode = f"verwaltet für {config.target_user}" if config else "unverwaltet"
+            recorder = None
+            if config:
+                try:
+                    RemoteStore(timeout=2).wait(0)
+                    recorder = "erreichbar"
+                except RecorderUnavailable:
+                    recorder = "NICHT erreichbar"
         except managed_config.ManagedConfigError as error:
-            mode = f"FEHLER: {error}"
+            mode, recorder = f"FEHLER: {error}", None
         print(json.dumps({"system": platform.system(), "macos": platform.mac_ver()[0],
                           "architecture": platform.machine(), "python": platform.python_version(),
-                          "mode": mode}, indent=2, ensure_ascii=False))
+                          "mode": mode, **({"recorder": recorder} if recorder else {})},
+                         indent=2, ensure_ascii=False))
         return
     if not 1024 <= args.port <= 65535 or not 1 <= args.retention_days <= 3650:
         parser.error("Port muss 1024–65535, Aufbewahrung muss 1–3650 Tage sein.")
     if os.geteuid() == 0:
+        if args.command == "token" and not args.demo:
+            # Verwaltet: Der Schlüssel gehört dem Aufzeichnungsdienst (root).
+            try:
+                config = managed_config.load()
+            except managed_config.ManagedConfigError as error:
+                parser.error(f"Verwaltete Konfiguration unsicher oder fehlerhaft: {error}")
+            if config:
+                print(load_token(managed_config.DATA_DIRECTORY))
+                return
         parser.error("MacScope im angemeldeten Benutzerkonto starten, ohne sudo.")
     if args.command == "run" and not args.demo:
         if sys.platform != "darwin":
@@ -71,7 +89,7 @@ def main():
     else:
         from .demo import run
     managed = None
-    if args.command == "run" and not args.demo:
+    if not args.demo:
         try:
             managed = managed_config.load()
         except managed_config.ManagedConfigError as error:
@@ -92,7 +110,13 @@ def main():
     # SQLite sidecars and future local files inherit private permissions.
     os.umask(0o077)
     if args.command == "token":
-        print(load_token(directory))
+        if managed:
+            try:
+                print(RemoteStore(timeout=2).token())
+            except RecorderUnavailable as error:
+                parser.error(str(error))
+        else:
+            print(load_token(directory))
         return
     lock_fd = os.open(directory / "agent.lock", os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
     try:
@@ -101,8 +125,19 @@ def main():
         os.close(lock_fd)
         parser.error("In diesem Datenverzeichnis läuft bereits ein MacScope-Agent.")
     configure_logging(directory)
-    store = Store(directory, args.retention_days)
-    token = load_token(directory)
+    if managed:
+        # Verlauf und Schlüssel liegen beim root-Aufzeichnungsdienst (#22).
+        store = RemoteStore(retention_days=args.retention_days)
+        try:
+            store.wait(30)
+            token = store.token()
+        except RecorderUnavailable as error:
+            logging.error("%s Neustart durch launchd.", error)
+            os.close(lock_fd)
+            raise SystemExit(managed_config.EXIT_RESTART) from error
+    else:
+        store = Store(directory, args.retention_days)
+        token = load_token(directory)
     allowed = set(managed.allow_apps) if managed else {"org.mozilla.firefox", *args.allow_app}
     backend = viewer.DemoBackend() if args.demo else viewer.AppleBackend(args.viewer_host)
     heartbeat = directory / managed_config.HEARTBEAT_NAME if managed else None
