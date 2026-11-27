@@ -254,7 +254,11 @@ class HTTPViewerTests(unittest.TestCase):
     def test_open_session(self):
         status, data = self.call("/api/viewer/session", "POST", {"mode": "control"})
         self.assertEqual(status, 201)
-        self.assertTrue(data["demo"])
+        self.assertEqual(data["kind"], "embedded")
+        self.assertTrue(data["stream"].startswith("/api/viewer/stream?session="))
+        self.assertEqual(self.call("/api/viewer")[1]["session"], {"mode": "control", "connected": False})
+        self.assertEqual(self.call("/api/viewer/session", "DELETE")[0], 204)
+        self.assertIsNone(self.call("/api/viewer")[1]["session"])
 
     def test_session_payload_is_strict(self):
         for payload in [{}, {"mode": 1}, {"mode": "control", "url": "vnc://evil"}, []]:

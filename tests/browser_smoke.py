@@ -5,6 +5,7 @@ Requires playwright and a Chromium browser. MACSCOPE_CHROMIUM may select a binar
 """
 import argparse
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -83,10 +84,25 @@ def main():
                 # Live-Bild (Viewer-Naht, Demo-Backend)
                 page.wait_for_function("document.querySelector('#viewerState').textContent === 'Bereit'")
                 assert page.locator("#viewerReason").is_hidden()
-                viewer_button = page.get_by_role("button", name="Bildschirmfreigabe öffnen", exact=True)
-                assert viewer_button.is_enabled()
-                viewer_button.click()
-                page.get_by_text("Demo: Hier würde sich die Bildschirmfreigabe öffnen.", exact=True).wait_for()
+                # Eingebetteter Betrachter: Demo-Quelle über WebSocket, Modus Steuern
+                page.get_by_role("button", name="Ansehen", exact=True).wait_for()
+                page.get_by_role("button", name="Steuern", exact=True).click()
+                page.locator("#stage").wait_for(state="visible")
+                page.wait_for_function("/([3-9]|\\d\\d+) Bilder/.test(document.querySelector('#stageInfo').textContent)",
+                                       timeout=15000)
+                assert page.locator("#screen").evaluate("c => [c.width, c.height]") == [480, 300]
+                assert "Eingaben aktiv" in page.locator("#stageInfo").inner_text()
+                # Ein Pixel nahe der Klickstelle wird weiß (Demo zeichnet den Zeiger dorthin).
+                page.locator("#screen").click(position={"x": 60, "y": 60})
+                page.wait_for_function("""() => { const c = document.querySelector('#screen');
+                    const s = c.getBoundingClientRect(); const x = Math.round(60 * c.width / s.width);
+                    const y = Math.round(60 * c.height / s.height);
+                    const d = c.getContext('2d').getImageData(x, y, 1, 1).data; return d[0] > 200 && d[1] > 200; }""",
+                                       timeout=10000)
+                page.locator("#events").get_by_text("Live-Bild verbunden", exact=True).first.wait_for(timeout=10000)
+                page.locator("#stageClose").click()
+                page.locator("#stage").wait_for(state="hidden")
+                page.locator("#events").get_by_text("Live-Bild getrennt", exact=True).first.wait_for(timeout=10000)
                 page.locator("#events").get_by_text("Live-Bild angefragt", exact=True).first.wait_for(timeout=5000)
                 assert page.locator("#kind option[value='app.launched']").count() == 1
                 assert page.locator("#kind option[value='viewer.requested']").count() == 1
@@ -119,8 +135,22 @@ def main():
                 assert page.locator("#events .event").count() == 0
                 assert page.locator("#viewerButtons button").count() == 0
                 assert not page_errors, page_errors
+                # Mit echter CSP (ohne bypass): WebSocket muss erlaubt sein, Bilder müssen ankommen.
+                strict = browser.new_context(viewport={"width":1200,"height":900})
+                page = strict.new_page()
+                csp_errors = []
+                page.on("console", lambda message: csp_errors.append(message.text)
+                        if "Content Security Policy" in message.text else None)
+                page.goto(url)
+                page.locator("#token").fill(token)
+                page.locator("#connect").click()
+                page.get_by_role("button", name="Ansehen", exact=True).click()
+                page.locator("#stageInfo").filter(has_text=re.compile(r"(?:[3-9]|\d\d+) Bilder")).wait_for(timeout=15000)
+                assert "nur ansehen" in page.locator("#stageInfo").inner_text()
+                page.locator("#stageClose").click()
+                assert not csp_errors, csp_errors
                 browser.close()
-            print("Browserprüfung bestanden: Anmeldung, Datenanzeige, Suche, Pagination, XSS-Abwehr, Live-Bild, Beenden-Dialog, bestätigtes simuliertes App-Ende, Mobilansicht, Trennen.")
+            print("Browserprüfung bestanden: Anmeldung, Datenanzeige, Suche, Pagination, XSS-Abwehr, Live-Bild (eingebettet, Steuern, echte CSP), Beenden-Dialog, bestätigtes simuliertes App-Ende, Mobilansicht, Trennen.")
         finally:
             process.terminate()
             try:

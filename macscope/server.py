@@ -9,6 +9,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from .service import ServiceError
+from .stream import relay
+from .websocket import WebSocket, accept_key, handshake_key
 
 WEB = Path(__file__).parent / "web"
 HOST_PATTERN = re.compile(r"(?:127\.0\.0\.1|localhost):[0-9]{1,5}\Z", re.ASCII)
@@ -38,7 +40,7 @@ def make_server(service, token: str, port: int = 8765):
             self.send_header("X-Frame-Options", "DENY")
             self.send_header("Content-Security-Policy",
                              "default-src 'none'; script-src 'self'; style-src 'self'; "
-                             "connect-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
+                             "connect-src 'self' ws://127.0.0.1:* ws://localhost:*; img-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
             self.end_headers()
             self.wfile.write(data)
 
@@ -64,7 +66,9 @@ def make_server(service, token: str, port: int = 8765):
                     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
                     "/style.css": ("style.css", "text/css; charset=utf-8"),
                 }
-                self._guard(authenticated=route.path not in static)
+                # Der Strom prüft statt des Schlüssels die einmalige Sitzungs-ID (Browser-WebSockets
+                # können keinen Authorization-Header setzen); die ID gibt es nur mit Schlüssel.
+                self._guard(authenticated=route.path not in static and route.path != "/api/viewer/stream")
                 if route.path in static:
                     filename, mime = static[route.path]
                     self._reply(200, (WEB / filename).read_bytes(), mime)
@@ -72,6 +76,8 @@ def make_server(service, token: str, port: int = 8765):
                     self._reply(200, service.status())
                 elif route.path == "/api/viewer":
                     self._reply(200, service.viewer_status())
+                elif route.path == "/api/viewer/stream":
+                    self._stream(route)
                 elif route.path == "/api/apps":
                     self._reply(200, {"apps": service.apps()})
                 elif route.path == "/api/events":
@@ -104,6 +110,28 @@ def make_server(service, token: str, port: int = 8765):
                 pass
             except Exception:
                 self._reply(500, {"error": "Interner Fehler. Prüfe die lokale Installation."})
+
+        def _stream(self, route):
+            if not hasattr(service.viewer, "source"):
+                raise ServiceError("Dieses Live-Bild hat keinen eingebetteten Strom.", 404)
+            if self.headers.get("Origin") is None:
+                raise ServiceError("Nur aus dem Dashboard.", 403)
+            key = handshake_key(self.headers)
+            session_id = parse_qs(route.query, max_num_fields=2).get("session", [""])[0]
+            session = service.attach_stream(session_id)
+            reason = "Fehler"
+            try:
+                self.send_response(101)
+                self.send_header("Upgrade", "websocket")
+                self.send_header("Connection", "Upgrade")
+                self.send_header("Sec-WebSocket-Accept", accept_key(key))
+                self.end_headers()
+                self.close_connection = True
+                # Kurzer Leerlauf-Takt: so merkt die Weiterleitung ein DELETE spätestens nach 1 s.
+                ws = WebSocket(self.connection, max_message=8192, idle_timeout=1.0)
+                reason = relay(ws, service.viewer.source(), session.mode, session.stopped)
+            finally:
+                service.finish_stream(session, reason)
 
         def _json_body(self):
             if self.headers.get_content_type() != "application/json":
@@ -146,6 +174,23 @@ def make_server(service, token: str, port: int = 8765):
                 pass
             except Exception:
                 self._reply(500, {"error": "Interner Fehler. Keine Aktion bestätigt."})
+
+        def do_DELETE(self):
+            try:
+                self._guard()
+                if self.path != "/api/viewer/session":
+                    raise ServiceError("Nicht gefunden.", 404)
+                service.close_viewer()
+                self.send_response(204)
+                self.send_header("Content-Length", "0")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+            except ServiceError as error:
+                self._reply(error.status, {"error": str(error)})
+            except (BrokenPipeError, ConnectionResetError, TimeoutError):
+                pass
+            except Exception:
+                self._reply(500, {"error": "Interner Fehler."})
 
     class LocalServer(ThreadingHTTPServer):
         daemon_threads = True

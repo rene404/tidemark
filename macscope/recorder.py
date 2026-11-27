@@ -125,6 +125,12 @@ class _Handler(socketserver.StreamRequestHandler):
             return
         if uid not in self.server.allowed_uids:
             log.warning("Verbindung von uid %s abgelehnt", uid)
+            try:
+                # Erst die Anfrage lesen: Schließt der Dienst vorher, sieht der Client je nach
+                # Zeitpunkt nur einen Verbindungsabbruch statt der Ablehnung.
+                self.rfile.readline(MAX_REQUEST + 1)
+            except (OSError, TimeoutError):
+                return
             self._send({"ok": False, "error": "Nicht berechtigt.", "status": 403})
             return
         while True:
