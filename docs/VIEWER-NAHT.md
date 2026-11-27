@@ -91,8 +91,9 @@ nach `kind` und den Fähigkeiten.
 
 ### Protokoll in der Zeitleiste
 
-Ereignistypen: `viewer.requested` und `viewer.refused` (Phase A), `viewer.opened`
-und `viewer.closed` (ab B1), jeweils mit Modus (`view`/`control`) und Backend.
+Ereignistypen: `viewer.requested` und `viewer.refused` (Anfrage im Dashboard, mit
+Modus `view`/`control`), `viewer.opened` und `viewer.closed` (tatsächliche
+Verbindung, mit Gegenstelle und Dauer), jeweils mit Backend.
 Sie werden **auch während einer Pause** protokolliert. Damit ist
 im Verlauf nachvollziehbar, **wann jemand zugesehen oder gesteuert hat**.
 
@@ -107,9 +108,19 @@ im Verlauf nachvollziehbar, **wann jemand zugesehen oder gesteuert hat**.
   `managed.json` (`"viewer_host"`, Installer: `--viewer-host`) bzw. kommt im
   unverwalteten Modus aus `--viewer-host`. Erlaubt sind nur Hostname oder IP.
   Das Dashboard öffnet ihn, und macOS startet die Bildschirmfreigabe-App.
-- Grenze: In A sieht tidemark nur die **Anfrage** (`viewer.requested`), nicht
-  ob Apple tatsächlich verbunden hat. Optional später: aufgebaute Verbindungen
-  auf Port 5900 erkennen → `viewer.opened`/`closed`.
+- **Tatsächliche Verbindungen** (#21): Der Agent liest alle 5 s
+  `netstat -an -p tcp` (läuft ohne Adminrechte, ca. 6 ms) und sucht aufgebaute
+  Verbindungen **zum** lokalen Port 5900. Eine Gegenstelle gilt erst als verbunden,
+  wenn sie bei zwei Abfragen hintereinander auftaucht. Das filtert die eigene
+  Port-Prüfung und kurze Versuche heraus. Mehrere Verbindungen derselben
+  Gegenstelle zählen als eine Sitzung. Die Zeitleiste zeigt „Live-Bild verbunden
+  (100.x.y.z)“ und „Live-Bild getrennt (…, Dauer)“, das Dashboard „Gerade
+  verbunden: …“.
+- Grenzen der Erkennung: Sie läuft nur, solange der Agent läuft, also nicht vor
+  der Anmeldung. Nach einem Agent-Neustart erscheint eine laufende Sitzung erneut
+  als „verbunden“. Ansehen und Steuern sind nicht unterscheidbar. Den
+  **Hochleistungsmodus** von macOS 14+ (nur Apple Silicon auf beiden Seiten) über
+  UDP sieht die Erkennung vermutlich nicht; das prüft die Abnahme.
 
 ### Dashboard (Phase A)
 
@@ -196,6 +207,7 @@ Das vermeidet Probleme mit dem Tastaturlayout (deutsches Layout auf beiden Seite
 | [ ] | Als Admin: Systemeinstellungen → Allgemein → Freigaben → Bildschirmfreigabe an | Nach ≤ 30 s „Bereit“ |
 | [ ] | Prüfen, ob der Port-Test (Verbindung auf 5900) am Ziel-Mac sichtbare Spuren hinterlässt (Meldung, Protokoll) | Keine Meldung für den Benutzer |
 | [ ] | Laptop: „Bildschirmfreigabe öffnen“ | Bildschirmfreigabe-App startet mit `vnc://<Tailscale-Name>`, Anmeldung klappt; Zeitleiste: „Live-Bild angefragt“ |
+| [ ] | Verbindung steht ≥ 10 s, dann Apples App schließen | Zeitleiste: „Live-Bild verbunden (Tailscale-IP des Laptops)“, Dashboard „Gerade verbunden: …“; nach dem Schließen „Live-Bild getrennt“ mit Dauer |
 | [ ] | In Apples App „Beobachten“ und „Steuern“ umschalten | Beides funktioniert; am Ziel-Mac zeigt die Menüleiste, dass der Bildschirm geteilt wird |
 | [ ] | Laptop außerhalb des Heimnetzes (Hotspot) | Wie oben |
 | [ ] | Ziel-Mac neu starten, **nicht** anmelden, vom Laptop `vnc://<Tailscale-Name>` direkt öffnen | Anmeldefenster sichtbar und bedienbar (Dashboard ist vor der Anmeldung nicht erreichbar) |
