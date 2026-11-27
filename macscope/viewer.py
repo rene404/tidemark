@@ -92,7 +92,7 @@ class ConnectionWatcher:
         for peer in sorted(self._open.keys() - current):
             seconds = max(0, round(self._wall() - self._open.pop(peer)))
             events.append(("viewer.closed", {"peer": peer, "seconds": seconds,
-                                             "message": f"Bildschirmfreigabe getrennt ({peer}, {_duration(seconds)})"}))
+                                             "message": f"Bildschirmfreigabe getrennt ({peer}, {duration_text(seconds)})"}))
         for peer in sorted((current & self._seen) - self._open.keys()):
             self._open[peer] = self._wall()
             events.append(("viewer.opened", {"peer": peer, "message": f"Bildschirmfreigabe verbunden ({peer})"}))
@@ -105,7 +105,7 @@ class ConnectionWatcher:
             return [{"peer": peer, "since": since} for peer, since in sorted(self._open.items())]
 
 
-def _duration(seconds):
+def duration_text(seconds):
     minutes, seconds = divmod(int(seconds), 60)
     hours, minutes = divmod(minutes, 60)
     if hours:
@@ -155,16 +155,21 @@ class AppleBackend:
 
 
 class DemoBackend:
-    """Simulation für ``--demo`` und Tests: öffnet nichts."""
+    """Simulation für ``--demo`` und Tests: eingebetteter Betrachter mit synthetischer
+    Quelle (Schicht 2 ohne Mac testbar). Modi werden hier durchgesetzt."""
 
     name = "demo"
 
     def capabilities(self):
-        return {"backend": self.name, "kind": "external", "available": True, "reason": None,
-                "modes": list(MODES), "modes_enforced": False, "pre_login": False, "connected": []}
+        return {"backend": self.name, "kind": "embedded", "available": True, "reason": None,
+                "modes": list(MODES), "modes_enforced": True, "pre_login": False, "connected": []}
 
     def open_session(self, mode):
-        return {"kind": "external", "url": None, "demo": True}
+        return {"kind": "embedded"}
+
+    def source(self):
+        from .stream import DemoSource
+        return DemoSource()
 
     def poll_connections(self):
         return []

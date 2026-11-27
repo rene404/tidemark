@@ -2,22 +2,37 @@
 from __future__ import annotations
 
 import copy
+import hmac
 import logging
 import os
 import platform
 import queue
+import secrets
 import threading
 import time
 
 from . import __version__
 from .store import Store
-from .viewer import MODES, NoBackend
+from .viewer import MODES, NoBackend, duration_text
 
 
 class ServiceError(Exception):
     def __init__(self, message, status=400):
         super().__init__(message)
         self.status = status
+
+
+class ViewerSession:
+    """Eingebettete Live-Bild-Sitzung: einmal verbindbar, kurz gültig, jederzeit beendbar."""
+
+    CONNECT_WITHIN = 30.0
+
+    def __init__(self, mode, backend):
+        self.id = secrets.token_urlsafe(24)
+        self.mode, self.backend = mode, backend
+        self.created = time.monotonic()
+        self.connected_at = None
+        self.stopped = threading.Event()
 
 
 class Service:
@@ -42,6 +57,7 @@ class Service:
         self._inflight = set()
         self._waiting = {}
         self._closed = False
+        self._session = None
         store.recover_commands()
         store.prune()
         store.event("agent.started", details={"version": __version__, "demo": demo, "managed": managed})
@@ -87,7 +103,12 @@ class Service:
             return self._paused
 
     def viewer_status(self):
-        return self.viewer.capabilities()
+        capabilities = self.viewer.capabilities()
+        with self._lock:
+            session = self._session
+            capabilities["session"] = None if session is None else {
+                "mode": session.mode, "connected": session.connected_at is not None}
+        return capabilities
 
     def open_viewer(self, mode):
         """Live-Bild anfragen. Jede Anfrage wird protokolliert, auch während einer Pause."""
@@ -101,11 +122,56 @@ class Service:
             self.store.event("viewer.refused", details={**details, "message": capabilities["reason"]})
             raise ServiceError(capabilities["reason"], 409)
         descriptor = self.viewer.open_session(mode)
+        if descriptor.get("kind") == "embedded":
+            with self._lock:
+                if self._session is not None:
+                    self._session.stopped.set()  # nur eine Sitzung zugleich; die alte endet
+                    if self._session.connected_at is None:
+                        self._session = None
+                session = ViewerSession(mode, capabilities["backend"])
+                self._session = session
+            descriptor = {"kind": "embedded", "mode": mode, "session": session.id,
+                          "stream": f"/api/viewer/stream?session={session.id}"}
         label = "Steuern" if mode == "control" else "Ansehen"
         message = (f"Live-Bild angefragt ({label})" if capabilities["modes_enforced"]
                    else "Live-Bild angefragt (Modus wird in der Bildschirmfreigabe gewählt)")
         self.store.event("viewer.requested", details={**details, "message": message})
         return descriptor
+
+    def attach_stream(self, session_id):
+        """Strom einer angefragten Sitzung annehmen (einmalig, innerhalb von 30 s)."""
+        with self._lock:
+            session = self._session
+            valid = (session is not None and isinstance(session_id, str)
+                     and hmac.compare_digest(session.id.encode(), session_id.encode())
+                     and session.connected_at is None and not session.stopped.is_set()
+                     and time.monotonic() - session.created <= ViewerSession.CONNECT_WITHIN)
+            if not valid:
+                raise ServiceError("Sitzung ungültig oder abgelaufen.", 403)
+            session.connected_at = time.time()
+        label = "Steuern" if session.mode == "control" else "Ansehen"
+        self.store.event("viewer.opened", details={"backend": session.backend, "mode": session.mode,
+                                                   "message": f"Live-Bild verbunden ({label})"})
+        return session
+
+    def finish_stream(self, session, reason):
+        with self._lock:
+            if self._session is session:
+                self._session = None
+        seconds = max(0, round(time.time() - session.connected_at))
+        self.store.event("viewer.closed", details={"backend": session.backend, "mode": session.mode,
+                                                   "seconds": seconds, "reason": reason,
+                                                   "message": f"Live-Bild getrennt ({reason}, {duration_text(seconds)})"})
+
+    def close_viewer(self):
+        """Laufende Sitzung beenden (DELETE /api/viewer/session)."""
+        with self._lock:
+            session = self._session
+            if session is None:
+                raise ServiceError("Keine laufende Live-Bild-Sitzung.", 404)
+            session.stopped.set()
+            if session.connected_at is None:
+                self._session = None
 
     def request_quit(self, pid, bundle_id, launched_at):
         with self._lock:
@@ -209,6 +275,8 @@ class Service:
 
     def close(self):
         with self._lock:
+            if self._session is not None:
+                self._session.stopped.set()
             if not self._closed:
                 self._closed = True
                 try:

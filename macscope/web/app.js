@@ -32,7 +32,7 @@ async function api(path, options = {}) {
     ...(options.body ? {"Content-Type":"application/json"} : {}),
     ...options.headers
   }});
-  const data = await response.json();
+  const data = response.status === 204 ? {} : await response.json();
   if (!response.ok) {
     if (response.status === 401 && !$("dashboard").hidden) disconnect();
     throw new Error(data.error || "Verbindung fehlgeschlagen.");
@@ -143,7 +143,10 @@ function renderViewer() {
     button.addEventListener("click", () => openViewer(mode, button));
     buttons.append(button);
   }
-  $("viewerNote").hidden = caps.kind !== "external";
+  $("viewerNote").textContent = caps.kind === "embedded"
+    ? "Das Bild erscheint hier im Dashboard. Jede Sitzung erscheint in der Zeitleiste."
+    : "Öffnet Apples Bildschirmfreigabe. Ansehen oder Steuern wählst du dort. Jede Anfrage erscheint in der Zeitleiste.";
+  $("viewerNote").hidden = !["external", "embedded"].includes(caps.kind);
 }
 async function loadViewer() {
   viewerCaps = await api("/api/viewer");
@@ -156,8 +159,8 @@ async function openViewer(mode, button) {
     if (session.kind === "external" && session.url) {
       window.location.assign(session.url);
       notify("Bildschirmfreigabe wird geöffnet …");
-    } else if (session.demo) {
-      notify("Demo: Hier würde sich die Bildschirmfreigabe öffnen.");
+    } else if (session.kind === "embedded" && session.stream) {
+      openStage(session);
     } else {
       notify("Dieser Betrachter wird in dieser Version noch nicht unterstützt.");
     }
@@ -214,7 +217,125 @@ async function poll() {
     }
   } finally { busy = false; }
 }
+// --- Eingebetteter Betrachter (Viewer-Naht, Schicht 2; Protokoll in macscope/stream.py) ---
+const STREAM = {HELLO:0x01, FRAME:0x02, CURSOR:0x03, DISPLAY:0x04, BYE:0x05,
+                START:0x10, POINTER:0x11, WHEEL:0x12, KEY:0x13, KEYFRAME:0x14, STOP:0x15};
+const CODECS = {1:"image/jpeg", 2:"image/png"};
+const FRAME_HEADER = 11;
+let stage = null;
+function streamMessage(type, payload) {
+  const json = new TextEncoder().encode(JSON.stringify(payload || {}));
+  const message = new Uint8Array(1 + json.length);
+  message[0] = type; message.set(json, 1);
+  return message;
+}
+function sendStream(type, payload) {
+  if (stage && stage.ws.readyState === WebSocket.OPEN) stage.ws.send(streamMessage(type, payload));
+}
+function stageInfo() {
+  if (!stage) return;
+  const parts = [stage.source === "demo" ? "Demo-Quelle" : null, stage.width ? stage.width + " × " + stage.height : null,
+                 stage.frames + " Bilder", stage.mode === "control" ? "Eingaben aktiv" : "nur ansehen"];
+  $("stageInfo").textContent = stage.ended ? (stage.bye || "Verbindung beendet") + " · " + stage.frames + " Bilder"
+    : parts.filter(Boolean).join(" · ");
+}
+function openStage(session) {
+  closeStage(false);
+  const ws = new WebSocket("ws://" + location.host + session.stream);
+  ws.binaryType = "arraybuffer";
+  stage = {ws, mode:session.mode, frames:0, drawing:false, pending:null, ended:false, bye:null, pointer:null};
+  $("stage").hidden = false;
+  $("stageTitle").textContent = "Bildschirm · " + modeLabels[session.mode];
+  $("screen").classList.toggle("control", session.mode === "control");
+  $("stageInfo").textContent = "Verbinde …";
+  ws.addEventListener("open", () => sendStream(STREAM.START, {max_fps:10, codecs:["jpeg", "png"]}));
+  ws.addEventListener("message", event => onStream(new Uint8Array(event.data), ws));
+  ws.addEventListener("close", () => {
+    if (stage && stage.ws === ws) { stage.ended = true; stageInfo(); }
+    loadViewer().catch(() => {});
+  });
+  $("stage").scrollIntoView({block:"nearest"});
+  if (session.mode === "control") $("screen").focus();
+}
+function onStream(data, ws) {
+  if (!stage || stage.ws !== ws || !data.length) return;
+  if (data[0] === STREAM.FRAME) {
+    const type = CODECS[data[1]];
+    if (!type || data.length <= FRAME_HEADER) return;
+    stage.pending = new Blob([data.subarray(FRAME_HEADER)], {type});
+    if (!stage.drawing) drawStage(stage);
+    return;
+  }
+  let payload;
+  try { payload = JSON.parse(new TextDecoder().decode(data.subarray(1)) || "{}"); } catch { return; }
+  if (data[0] === STREAM.HELLO || data[0] === STREAM.DISPLAY) {
+    const width = Number(payload.width), height = Number(payload.height);
+    if (width > 0 && width <= 16384 && height > 0 && height <= 16384) {
+      $("screen").width = stage.width = width; $("screen").height = stage.height = height;
+    }
+    if (data[0] === STREAM.HELLO) stage.source = String(payload.source || "");
+    stageInfo();
+  } else if (data[0] === STREAM.BYE) {
+    stage.bye = "Beendet: " + String(payload.reason || "ohne Angabe");
+  }
+}
+async function drawStage(current) {
+  current.drawing = true;
+  while (current.pending && stage === current) {
+    const blob = current.pending; current.pending = null;
+    try {
+      const bitmap = await createImageBitmap(blob);
+      const canvas = $("screen");
+      canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      bitmap.close();
+      current.frames++;
+      stageInfo();
+    } catch { sendStream(STREAM.KEYFRAME); }
+  }
+  current.drawing = false;
+}
+function closeStage(release = true) {
+  if (!stage) return;
+  const ws = stage.ws;
+  sendStream(STREAM.STOP);
+  stage = null;
+  ws.close();
+  $("stage").hidden = true;
+  if (release) api("/api/viewer/session", {method:"DELETE"}).catch(() => {}).finally(() => loadViewer().catch(() => {}));
+}
+function pointerPosition(event) {
+  const box = $("screen").getBoundingClientRect();
+  return {x: Math.min(1, Math.max(0, (event.clientX - box.left) / box.width)),
+          y: Math.min(1, Math.max(0, (event.clientY - box.top) / box.height)), buttons: event.buttons & 31};
+}
+function controlling() { return stage && stage.mode === "control" && !stage.ended; }
+for (const name of ["pointermove", "pointerdown", "pointerup"]) {
+  $("screen").addEventListener(name, event => {
+    if (!controlling()) return;
+    if (name === "pointerdown") $("screen").focus();
+    const first = stage.pointer === null;
+    stage.pointer = pointerPosition(event);
+    if (name !== "pointermove") { sendStream(STREAM.POINTER, stage.pointer); stage.pointer = null; }
+    else if (first) requestAnimationFrame(() => { if (stage && stage.pointer) { sendStream(STREAM.POINTER, stage.pointer); stage.pointer = null; } });
+  });
+}
+$("screen").addEventListener("wheel", event => {
+  if (!controlling()) return;
+  event.preventDefault();
+  sendStream(STREAM.WHEEL, {dx: Math.max(-10000, Math.min(10000, event.deltaX)), dy: Math.max(-10000, Math.min(10000, event.deltaY))});
+}, {passive:false});
+for (const name of ["keydown", "keyup"]) {
+  $("screen").addEventListener(name, event => {
+    if (!controlling() || !event.code) return;
+    event.preventDefault();
+    sendStream(STREAM.KEY, {code: event.code.slice(0, 32), down: name === "keydown", alt: event.altKey,
+                            ctrl: event.ctrlKey, meta: event.metaKey, shift: event.shiftKey});
+  });
+}
+$("stageClose").addEventListener("click", () => closeStage());
+
 function disconnect() {
+  closeStage(false);
   token = ""; generation++; pending.clear(); rows = []; latest = 0; viewerCaps = null; pollCount = 0;
   selectedApp = null; clearTimeout(searchTimer);
   clearInterval(timer); timer = null;

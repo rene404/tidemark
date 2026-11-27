@@ -1,6 +1,6 @@
 # Konzept: Viewer-Naht
 
-Status: **Schicht 1 für Phase A umgesetzt** (`macscope/viewer.py`) · Schicht 2 spezifiziert, Code ab B1
+Status: **Schicht 1 für Phase A umgesetzt** (`macscope/viewer.py`) · **Schicht 2 mit Demo-Quelle umgesetzt** (`macscope/websocket.py`, `macscope/stream.py`, #17); es fehlt die echte Quelle (Swift, #18)
 
 **Entschieden (2026-11-27):** Der Betrachter in Phase B läuft **im Browser-Dashboard**, nicht als eigene Swift-App.
 
@@ -159,6 +159,35 @@ Koordinaten sind **normiert (0–1)**. Damit sind Retina-Faktor und Fenstergrö�
 des Laptops egal. Tasten werden als physische Codes übertragen, nicht als Text.
 Das vermeidet Probleme mit dem Tastaturlayout (deutsches Layout auf beiden Seiten).
 
+**Umsetzung v0 (#17, ohne Mac getestet):**
+
+- `FRAME` = Typ | Codec (1 Byte: 1 = JPEG, 2 = PNG) | Flags (1 Byte, Bit 0 = Schlüsselbild) |
+  Zeitstempel in ms (8 Byte, big endian) | Bilddaten. Alle anderen Nachrichten: Typ + JSON.
+  Typ-Bytes: `HELLO 0x01`, `FRAME 0x02`, `CURSOR 0x03`, `DISPLAY 0x04`, `BYE 0x05`,
+  `START 0x10`, `POINTER 0x11`, `WHEEL 0x12`, `KEY 0x13`, `KEYFRAME 0x14`, `STOP 0x15`.
+- **WebSocket** selbst gebaut (`macscope/websocket.py`, RFC 6455, nur Standardbibliothek):
+  nur binär, keine Fragmente, keine Erweiterungen; Client-Frames müssen maskiert sein.
+- **Anmeldung am Strom:** Browser-WebSockets können keinen `Authorization`-Header setzen.
+  Deshalb liefert `POST /api/viewer/session` (mit Schlüssel) eine **Sitzungs-ID**, die
+  genau **einmal** und nur **30 s** lang für `GET /api/viewer/stream?session=…` gilt.
+  Host- und Origin-Prüfung wie überall; ohne `Origin` wird der Strom abgelehnt.
+  Es gibt höchstens eine Sitzung; eine neue beendet die alte.
+- **Weiterleitung** (`stream.relay`): Nachrichten vom Betrachter höchstens 4 KB und
+  120/s (Spitze 240), JSON und Wertebereiche geprüft; `POINTER`/`WHEEL`/`KEY` im Modus
+  Ansehen → Verbindung zu (1008) und Grund in der Zeitleiste. Nachrichten der Quelle
+  höchstens 8 MB; Nachrichten mit Betrachter-Typen von der Quelle werden verworfen.
+- `DELETE /api/viewer/session` beendet die Sitzung (spätestens nach 1 s, `204`).
+- Zeitleiste: `viewer.opened` beim Verbinden, `viewer.closed` mit Grund und Dauer.
+- **Demo-Quelle** (`--demo`): PNG statt JPEG (die Standardbibliothek kann kein JPEG),
+  wandernder Balken, Zeiger folgt `POINTER` (zeigt, dass der Steuer-Weg funktioniert).
+- **Dashboard:** Bereich über der Zeitleiste mit `<canvas>`, Bilder per
+  `createImageBitmap`. Bei Steuern: Zeiger (gebündelt je Animationsbild), Scrollen und
+  Tasten (`KeyboardEvent.code`) nur, solange das Bild den Fokus hat.
+- **CSP:** `connect-src 'self' ws://127.0.0.1:* ws://localhost:*`. Bilder brauchen keine
+  `img-src`-Freigabe, weil sie über `createImageBitmap` aufs Canvas kommen.
+- Offen für #18: Swift-Quelle als eigener LaunchAgent (siehe CaptureProbe) statt
+  Kindprozess; dann spricht `source()` über einen lokalen Socket mit ihr.
+
 **Ausbaustufen:**
 
 - **B1 (nur ansehen):** JPEG-Bilder mit begrenzter Bildrate, keine Eingaben.
@@ -213,8 +242,8 @@ Das vermeidet Probleme mit dem Tastaturlayout (deutsches Layout auf beiden Seite
 | [ ] | Ziel-Mac neu starten, **nicht** anmelden, vom Laptop `vnc://<Tailscale-Name>` direkt öffnen | Anmeldefenster sichtbar und bedienbar (Dashboard ist vor der Anmeldung nicht erreichbar) |
 | [ ] | Als Standardbenutzer am Ziel-Mac: Bildschirmfreigabe abschalten versuchen | Verlangt Admin-Passwort |
 
-**B1 (später):** WebSocket-Weiterleitung + Browser-Betrachter + Demo-Quelle →
-Swift-Quelle (nur ansehen) → `EmbeddedBackend`.
+**B1:** ✅ WebSocket-Weiterleitung + Browser-Betrachter + Demo-Quelle (#17) →
+⬜ Swift-Quelle (nur ansehen, #18) → ⬜ `EmbeddedBackend` für den echten Betrieb.
 
 ## Offene Entscheidungen
 

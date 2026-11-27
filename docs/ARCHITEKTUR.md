@@ -27,6 +27,7 @@ Bibliotheken oder Dienste.
 | `macscope/platform_macos.py` | NSWorkspace-Ereignisse, Menüleiste, Snapshot und normale Beenden-Anfrage |
 | `macscope/service.py` | Zustand, Begrenzung der Aufträge, Freigabeliste, Bestätigung und Ablauf |
 | `macscope/store.py` | SQLite, Cursor, Aufbewahrung und persistentes Aktionsprotokoll |
+| `macscope/websocket.py`, `macscope/stream.py` | Live-Bild Schicht 2: minimales WebSocket, Strom-Protokoll v0, geprüfte Weiterleitung, Demo-Quelle |
 | `macscope/recorder.py` | Verwalteter Modus: root-Aufzeichnungsdienst (besitzt die Datenbank) und `RemoteStore` im Agenten, Unix-Socket mit fester Operationsliste |
 | `macscope/server.py` | Nur Loopback; Schlüssel-, Host- und Origin-Prüfung |
 | `macscope/web/` | Anmeldung, Zeitleiste, Suchfilter, App-Liste, Beenden-Dialog |

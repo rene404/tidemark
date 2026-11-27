@@ -248,7 +248,7 @@ releases go to `main`.
 |---|---|---|
 | 0 · Foundation | Tailscale, standard account, managed mode, root watchdog | built, hardware acceptance pending |
 | A · Live screen via Apple | Viewer seam, Apple Screen Sharing over Tailscale | built, hardware acceptance pending. After this, TeamViewer can go |
-| B1 · Own screen stream | Swift module (ScreenCaptureKit) behind the same seam, view only | open: depends on the [CaptureProbe](tools/capture-probe/README.md) results and [code signing](docs/CODE-SIGNATUR.md) |
+| B1 · Own screen stream | Swift module (ScreenCaptureKit) behind the same seam, view only | stream relay and in-dashboard viewer built and tested with a demo source (`--demo`); Swift source open: depends on the [CaptureProbe](tools/capture-probe/README.md) results and [code signing](docs/CODE-SIGNATUR.md) |
 | B2 · Own remote control | Mouse / keyboard via CGEvent | open |
 | B3 · Polish | H.264, latency; decide whether Apple Screen Sharing can be switched off | open |
 
