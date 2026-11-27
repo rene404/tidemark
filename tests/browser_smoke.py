@@ -59,7 +59,10 @@ def main():
                 if binary:
                     options["executable_path"] = binary
                 browser = engine.chromium.launch(**options)
-                page = browser.new_page(viewport={"width":1440,"height":1100})
+                # Playwrights wait_for_function braucht eval, das die CSP des Dashboards verbietet.
+                # Ohne CSP ist die XSS-Prüfung strenger: nur korrektes Escaping schützt dann.
+                context = browser.new_context(viewport={"width":1440,"height":1100}, bypass_csp=True)
+                page = context.new_page()
                 page_errors = []
                 page.on("pageerror", lambda error: page_errors.append(str(error)))
                 page.goto(url)
@@ -77,9 +80,19 @@ def main():
                 assert page.evaluate("sessionStorage.length") == 0
                 assert page.locator("#events").inner_text().find(payload) >= 0
                 assert page.evaluate("window.injected === undefined")
+                # Live-Bild (Viewer-Naht, Demo-Backend)
+                page.wait_for_function("document.querySelector('#viewerState').textContent === 'Bereit'")
+                assert page.locator("#viewerReason").is_hidden()
+                viewer_button = page.get_by_role("button", name="Bildschirmfreigabe öffnen", exact=True)
+                assert viewer_button.is_enabled()
+                viewer_button.click()
+                page.get_by_text("Demo: Hier würde sich die Bildschirmfreigabe öffnen.", exact=True).wait_for()
+                page.locator("#events").get_by_text("Live-Bild angefragt", exact=True).first.wait_for(timeout=5000)
+                assert page.locator("#kind option[value='app.launched']").count() == 1
+                assert page.locator("#kind option[value='viewer.requested']").count() == 1
                 page.locator("#older").click()
-                page.wait_for_function("document.querySelectorAll('#events .event').length > 100")
-                assert "Historische Ansicht" in page.locator("#resultInfo").inner_text()
+                page.wait_for_function("document.querySelector('#resultInfo').textContent.includes('Historische Ansicht')")
+                assert page.locator("#events .event").count() > 101
                 page.locator("#refresh").click()
                 page.wait_for_function("document.querySelector('#resultInfo').textContent.includes('Neueste')")
                 page.locator("#search").fill("Testapp 042")
@@ -104,9 +117,10 @@ def main():
                 page.locator("#disconnect").click()
                 assert page.locator("#login").is_visible()
                 assert page.locator("#events .event").count() == 0
+                assert page.locator("#viewerButtons button").count() == 0
                 assert not page_errors, page_errors
                 browser.close()
-            print("Browserprüfung bestanden: Anmeldung, Datenanzeige, Suche, Pagination, XSS-Abwehr, Beenden-Dialog, bestätigtes simuliertes App-Ende, Mobilansicht, Trennen.")
+            print("Browserprüfung bestanden: Anmeldung, Datenanzeige, Suche, Pagination, XSS-Abwehr, Live-Bild, Beenden-Dialog, bestätigtes simuliertes App-Ende, Mobilansicht, Trennen.")
         finally:
             process.terminate()
             try:

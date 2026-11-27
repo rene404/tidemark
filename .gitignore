@@ -227,3 +227,6 @@ __marimo__/
 access-token
 agent.lock
 .DS_Store
+
+# Swift-Testprogramm
+tools/capture-probe/build/
