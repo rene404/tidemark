@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Tests (Backend + HTTP)
+        run: python -m unittest discover -s tests -v
+
+      - name: Syntaxprüfungen
+        run: |
+          python -m compileall -q macscope scripts
+          node --check macscope/web/app.js
+          bash -n install.command install-managed.command start.command scripts/install-macos.sh tools/capture-probe/build.sh tools/capture-probe/agent.sh
+
+      - name: Paket mit PyObjC installieren, AppKit-Modul importieren
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --quiet .
+          .venv/bin/python -c "import macscope.platform_macos"
+          .venv/bin/macscope diagnose
+
+      - name: CaptureProbe (Swift) bauen
+        run: bash tools/capture-probe/build.sh "$RUNNER_TEMP"
+
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Playwright + Chromium
+        run: |
+          python -m pip install --quiet playwright==1.65.2
+          python -m playwright install --with-deps chromium
+
+      - name: Browser-Test (Demo-Modus)
+        run: python tests/browser_smoke.py
