@@ -108,3 +108,8 @@ Für den ersten einzelnen iMac sind FastAPI, eine SPA-Buildkette, Postgres oder
 ein zentraler Message Broker nicht erforderlich. Bei mehreren Geräten oder
 einem umfangreicheren Aktionsmodell lässt sich die HTTP-Schicht getrennt
 weiterentwickeln.
+
+## Live-Bild und Fernsteuerung
+
+Konzept der austauschbaren Viewer-Naht (Phase A: Apple-Bildschirmfreigabe,
+Phase B: eigenes Swift-Modul): [VIEWER-NAHT.md](VIEWER-NAHT.md).
