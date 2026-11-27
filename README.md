@@ -55,7 +55,7 @@ flowchart LR
 | Timeline | GUI app launched / quit / activated, sleep / wake, session changes; apps already running at agent start are marked as such, not as new launches |
 | Running apps | Name, bundle ID, PID and launch time, refreshed every second |
 | Remote quit | Normal quit request for allow-listed apps (Firefox by default). "Request sent" and "app actually quit" are separate, logged states |
-| Live screen | Opens Apple Screen Sharing over Tailscale; every request is logged in the timeline |
+| Live screen | Opens Apple Screen Sharing over Tailscale; every request and every actual connection (peer, duration) is logged in the timeline |
 | Search | By app / bundle ID and event type, paging into older entries |
 | Retention | 30 days by default, pruned at start and hourly |
 | Managed mode | No pause / quit in the menu bar, settings only from a root-owned file, automatic restart, root watchdog that also detects a hung or stopped agent |

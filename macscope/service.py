@@ -154,9 +154,20 @@ class Service:
                 logging.getLogger(__name__).warning("Lebenszeichen nicht schreibbar: %s", error)
             self._beat_failed = True
 
+    def watch_viewer(self):
+        """Tatsächliche Live-Bild-Verbindungen protokollieren, auch während einer Pause."""
+        try:
+            events = self.viewer.poll_connections()
+        except Exception:
+            logging.getLogger(__name__).exception("Live-Bild-Verbindungen nicht abfragbar")
+            return
+        for kind, details in events:
+            self.store.event(kind, details={"backend": self.viewer.name, **details})
+
     def tick(self, adapter):
         """Must be called on the AppKit main thread. adapter.quit rechecks live identity."""
         self.beat()
+        self.watch_viewer()
         while True:
             try:
                 command_id, target, queued_at = self._queue.get_nowait()

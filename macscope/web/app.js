@@ -15,7 +15,8 @@ const names = {
   "action.terminated":"App-Ende bestätigt", "action.not_running":"App-Instanz läuft nicht mehr",
   "action.refused":"Beenden-Anfrage abgelehnt", "action.unconfirmed":"App-Ende nicht bestätigt",
   "action.failed":"Fernaktion fehlgeschlagen", "action.expired":"Fernaktion abgelaufen",
-  "viewer.requested":"Live-Bild angefragt", "viewer.refused":"Live-Bild abgelehnt"
+  "viewer.requested":"Live-Bild angefragt", "viewer.refused":"Live-Bild abgelehnt",
+  "viewer.opened":"Live-Bild verbunden", "viewer.closed":"Live-Bild getrennt"
 };
 const modeLabels = {view:"Ansehen", control:"Steuern"};
 function element(tag, cls, content) {
@@ -128,6 +129,10 @@ function renderViewer() {
   $("viewerState").className = "pill" + (ready ? " online" : "");
   $("viewerReason").textContent = caps?.reason || (caps && !currentStatus.agent_online ? "Agent antwortet nicht." : "");
   $("viewerReason").hidden = !$("viewerReason").textContent;
+  const connected = caps?.connected || [];
+  $("viewerConnected").textContent = connected.length ? "Gerade verbunden: " + connected.map(c =>
+    c.peer + " seit " + new Date(c.since * 1000).toLocaleTimeString("de-AT", {hour:"2-digit", minute:"2-digit"})).join(", ") : "";
+  $("viewerConnected").hidden = !connected.length;
   if (!caps || caps.kind === "none") return;
   // Ohne erzwungene Modi (Apple) gibt es nur einen Knopf; der Modus wird in Apples App gewählt.
   const modes = caps.modes_enforced ? caps.modes : ["control"];
