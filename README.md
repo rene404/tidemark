@@ -263,9 +263,10 @@ own Screen Sharing is not affected. Details in [docs/CODE-SIGNATUR.md](docs/CODE
 - [Apple: Allow a remote computer to access your Mac](https://support.apple.com/guide/mac-help/allow-a-remote-computer-to-access-your-mac-mchlp1066/mac)
 - [PyObjC: installation](https://pyobjc.readthedocs.io/en/latest/install.html) and [supported platforms](https://pyobjc.readthedocs.io/en/latest/supported-platforms.html)
 
-The dependency range `pyobjc-framework-Cocoa>=11.1,<13` is deliberately narrow.
-There is no lock file from a real Mac yet; pin the installed versions after
-the hardware acceptance and test Intel and Apple Silicon separately.
+`pyproject.toml` allows PyObjC `>=11.1,<13`; the installers and CI install the
+tested versions from [`constraints.txt`](constraints.txt) (`pyobjc-core` and
+`pyobjc-framework-Cocoa` 12.2.2, universal2 wheels for Intel and Apple Silicon).
+PyObjC packages must always share one version.
 
 ## License
 
