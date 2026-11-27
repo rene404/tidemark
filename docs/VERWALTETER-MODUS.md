@@ -15,8 +15,10 @@ dafür, dass er dort läuft und bleibt.
 | Programm + Python-Umgebung | `/Library/Application Support/MacScope/app`, `…/venv` | Benutzer kann nichts ändern oder löschen |
 | Konfiguration | `/Library/Application Support/MacScope/managed.json` | Zielbenutzer, freigegebene Apps, Aufbewahrung, Port |
 | Systemweiter LaunchAgent | `/Library/LaunchAgents/local.macscope.managed-agent.plist` | Startet den Agenten bei jeder GUI-Anmeldung; bei unerwartetem Ende Neustart nach 10 s |
-| root-Wächter (LaunchDaemon) | `/Library/LaunchDaemons/local.macscope.watchdog.plist` | Alle 30 s: Agent in der Sitzung des Zielbenutzers geladen und laufend? Sonst nachladen/starten |
-| Wächter-Protokoll | `/Library/Logs/MacScope-watchdog.log` | Jede Wiederherstellung mit Zeitstempel |
+| root-Wächter (LaunchDaemon) | `/Library/LaunchDaemons/local.macscope.watchdog.plist` | Alle 30 s: Agent in der Sitzung des Zielbenutzers geladen, laufend und lebendig? Sonst nachladen/starten/neu starten |
+| Lebenszeichen | `~/Library/Application Support/MacScope/heartbeat` (Benutzer) | Agent aktualisiert es alle 10 s vom Hauptthread |
+| Wächter-Zustand | `/Library/Application Support/MacScope/watchdog-state.json` | Merkt sich ein veraltetes Lebenszeichen bis zur nächsten Prüfung |
+| Wächter-Protokoll | `/Library/Logs/MacScope-watchdog.log` | Jede Wiederherstellung mit Zeitstempel; Rotation über `/etc/newsyslog.d/macscope.conf` (3 × 1 MB) |
 
 Im verwalteten Modus:
 
@@ -28,7 +30,12 @@ Im verwalteten Modus:
 - In anderen Benutzerkonten beendet sich der Agent sofort (Exit 0, kein Neustart).
 - Ist `managed.json` vorhanden, aber unsicher (nicht root-eigen, beschreibbar,
   Symlink, fehlerhaft), **startet der Agent nicht**, statt still unverwaltet zu laufen.
-- Protokoll des Agenten: `~/Library/Application Support/MacScope/logs/agent.log`.
+- Protokoll des Agenten: `~/Library/Application Support/MacScope/logs/agent.log`
+  (rotiert ab 1 MB, 3 Generationen).
+- **Lebenszeichen:** Ist es älter als 120 s, und zwar bei **zwei Prüfungen in Folge**,
+  setzt der Wächter einen angehaltenen Prozess fort (`SIGCONT`) und startet den
+  Agenten neu (`kickstart -k`). Zwei Prüfungen, weil das Lebenszeichen während des
+  Ruhezustands ruht; direkt nach dem Aufwachen wäre es sonst fälschlich „veraltet“.
 
 ## Einrichten (als Administrator)
 
@@ -68,8 +75,10 @@ sudo bash install-managed.command remove
   Der Agent legt beides neu an, die Lücke fällt im Dashboard auf. Ein root-eigener
   Speicher wäre ein späterer Schritt.
 - `launchctl bootout` als Benutzer entlädt den Agenten für **bis zu ~30 s**, bis der Wächter ihn nachlädt.
-- Ein angehaltener Prozess (`kill -STOP`) gilt für launchd als laufend. Das Dashboard
-  zeigt dann veraltete Daten an, der Wächter greift nicht.
+- Ein angehaltener oder hängender Agent wird über das Lebenszeichen erkannt, aber erst
+  nach **2,5–3 Minuten** (120 s Grenze + zwei Prüfungen à 30 s).
+- Das Lebenszeichen liegt im Datenverzeichnis des Benutzers. Er könnte es löschen
+  (führt zum Neustart) oder künstlich aktuell halten (verdeckt einen angehaltenen Agenten).
 - Administratoren können alles abschalten. Das ist gewollt.
 - Noch **nicht auf echter Hardware abgenommen** (siehe unten).
 
@@ -84,6 +93,8 @@ sudo bash install-managed.command remove
 | [ ] | „Sofort beenden“ | Ebenso |
 | [ ] | `launchctl bootout gui/$(id -u)/local.macscope.managed-agent` als Standardbenutzer | Nach ≤ 30 s wieder da, Eintrag im Wächter-Protokoll |
 | [ ] | `rm`/Bearbeiten unter `/Library/Application Support/MacScope` als Standardbenutzer | Verweigert |
+| [ ] | Als Standardbenutzer `kill -STOP <PID des Agenten>` | Nach ≈ 3 min neu gestartet, Eintrag „Lebenszeichen … veraltet“ im Wächter-Protokoll |
+| [ ] | Mac > 5 min schlafen lassen, aufwecken, 2 min warten | **Kein** Neustart des Agenten (kein neues `agent.started`, kein Wächter-Eintrag) |
 | [ ] | Neustart, Standardbenutzer meldet sich an | Agent startet ohne Zutun |
 | [ ] | Admin-Konto anmelden (schneller Benutzerwechsel) | Dort kein Agent, kein Fehler im Protokoll |
 | [ ] | `managed.json` testweise `chmod 666` (als Admin), Agent neu starten | Agent startet **nicht**; Wächter-Protokoll meldet Konfigurationsfehler; danach `chmod 644` |

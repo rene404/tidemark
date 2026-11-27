@@ -116,6 +116,7 @@ def install(args):
     remove_old_user_agent(account)
     write_root_file(managed.AGENT_PLIST, managed.agent_plist(PYTHON))
     write_root_file(managed.WATCHDOG_PLIST, managed.watchdog_plist(PYTHON))
+    write_root_file(managed.NEWSYSLOG_CONF, managed.newsyslog_conf().encode())
     launchctl("bootout", f"system/{managed.WATCHDOG_LABEL}")
     launchctl("bootstrap", "system", str(managed.WATCHDOG_PLIST), check=True)
     if logged_in(account.pw_uid):
@@ -138,7 +139,7 @@ def remove(args):
             launchctl("bootout", f"gui/{pwd.getpwnam(config.target_user).pw_uid}/{managed.AGENT_LABEL}")
         except KeyError:
             pass
-    for path in [managed.WATCHDOG_PLIST, managed.AGENT_PLIST]:
+    for path in [managed.WATCHDOG_PLIST, managed.AGENT_PLIST, managed.NEWSYSLOG_CONF]:
         path.unlink(missing_ok=True)
     if managed.SYSTEM_DIRECTORY.exists():
         shutil.rmtree(managed.SYSTEM_DIRECTORY)
