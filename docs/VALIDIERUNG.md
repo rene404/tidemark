@@ -44,6 +44,11 @@ python3 -m playwright install chromium
 python3 tests/browser_smoke.py
 ```
 
+Der Browser-Test läuft außerdem in der CI (Job `browser`, Linux). Er umgeht
+im Testkontext die Content-Security-Policy, weil Playwrights `wait_for_function`
+sonst an `script-src 'self'` scheitert. Die XSS-Prüfung wird dadurch strenger:
+Nur korrektes Escaping schützt dann.
+
 Alternativ wählt `MACSCOPE_CHROMIUM` den absoluten Pfad zu einem passenden
 Chromium-Binary. Der Test startet ausschließlich `--demo` in einem temporären
 Datenverzeichnis und beendet keine echte Mac-App. Er prüft Anmeldung, Suche,
