@@ -13,6 +13,7 @@ import threading
 from pathlib import Path
 
 from . import managed as managed_config
+from . import viewer
 from .service import Service
 from .server import make_server
 from .store import Store, load_token, private_directory
@@ -26,6 +27,7 @@ def main():
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--retention-days", type=int, default=30)
     parser.add_argument("--allow-app", action="append", default=[], help="Zusätzlich lokal freigegebene Bundle-ID")
+    parser.add_argument("--viewer-host", help="Tailscale-Name dieses Macs für das Live-Bild (vnc://)")
     args = parser.parse_args()
     if args.command == "diagnose":
         try:
@@ -62,9 +64,11 @@ def main():
             # Exit 0: launchd startet den Agenten für fremde Konten nicht neu.
             print(f"Verwalteter Modus gilt für {managed.target_user}, nicht für {user}. Kein Start.")
             return
-        if args.allow_app or args.port != 8765 or args.retention_days != 30:
+        if args.allow_app or args.port != 8765 or args.retention_days != 30 or args.viewer_host:
             print("Verwalteter Modus: Einstellungen kommen aus managed.json, Startoptionen werden ignoriert.")
-        args.port, args.retention_days = managed.port, managed.retention_days
+        args.port, args.retention_days, args.viewer_host = managed.port, managed.retention_days, managed.viewer_host
+    if args.viewer_host is not None and not viewer.valid_host(args.viewer_host):
+        parser.error("--viewer-host: nur Hostname oder IP (Tailscale-Name).")
     directory = args.data_dir or Path.home() / "Library" / "Application Support" / ("MacScope-Demo" if args.demo else "MacScope")
     private_directory(directory)
     # SQLite sidecars and future local files inherit private permissions.
@@ -88,7 +92,8 @@ def main():
     store = Store(directory, args.retention_days)
     token = load_token(directory)
     allowed = set(managed.allow_apps) if managed else {"org.mozilla.firefox", *args.allow_app}
-    service = Service(store, allowed_bundles=allowed, demo=args.demo, managed=bool(managed))
+    backend = viewer.DemoBackend() if args.demo else viewer.AppleBackend(args.viewer_host)
+    service = Service(store, allowed_bundles=allowed, demo=args.demo, managed=bool(managed), viewer=backend)
     server = None
     try:
         server = make_server(service, token, args.port)

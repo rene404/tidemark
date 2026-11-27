@@ -2,6 +2,7 @@
 const $ = id => document.getElementById(id);
 let token = "", timer = null, busy = false, rows = [], latest = 0, generation = 0;
 let historyMode = false, selectedApp = null, currentStatus = {}, searchTimer = null;
+let viewerCaps = null, pollCount = 0;
 const pending = new Set();
 const names = {
   "agent.started":"Agent gestartet", "agent.stopped":"Agent beendet",
@@ -13,8 +14,10 @@ const names = {
   "action.queued":"Beenden angefragt", "action.requested":"Beenden-Anfrage übermittelt",
   "action.terminated":"App-Ende bestätigt", "action.not_running":"App-Instanz läuft nicht mehr",
   "action.refused":"Beenden-Anfrage abgelehnt", "action.unconfirmed":"App-Ende nicht bestätigt",
-  "action.failed":"Fernaktion fehlgeschlagen", "action.expired":"Fernaktion abgelaufen"
+  "action.failed":"Fernaktion fehlgeschlagen", "action.expired":"Fernaktion abgelaufen",
+  "viewer.requested":"Live-Bild angefragt", "viewer.refused":"Live-Bild abgelehnt"
 };
+const modeLabels = {view:"Ansehen", control:"Steuern"};
 function element(tag, cls, content) {
   const item = document.createElement(tag);
   if (cls) item.className = cls;
@@ -42,13 +45,13 @@ function renderEvents() {
   const list = $("events"); list.replaceChildren();
   rows.sort((a,b) => b.id-a.id);
   for (const row of rows) {
-    const action = row.kind.startsWith("action.");
+    const action = row.kind.startsWith("action.") || row.kind.startsWith("viewer.");
     const li = element("li", "event" + (action ? " action" : ""));
     const date = new Date(row.timestamp * 1000);
     const time = element("time", "", date.toLocaleTimeString("de-AT", {hour:"2-digit", minute:"2-digit", second:"2-digit"}));
     time.dateTime = date.toISOString();
     time.append(element("small", "", date.toLocaleDateString("de-AT", {day:"2-digit", month:"2-digit"})));
-    const mark = element("span", "eventmark", action ? "↗" : row.kind === "app.activated" ? "●" : row.kind.includes("terminated") ? "−" : "+");
+    const mark = element("span", "eventmark", row.kind.startsWith("viewer.") ? "◎" : action ? "↗" : row.kind === "app.activated" ? "●" : row.kind.includes("terminated") ? "−" : "+");
     mark.setAttribute("aria-hidden", "true");
     const body = element("div");
     body.append(element("strong", "", row.app_name || "iMac"));
@@ -117,6 +120,48 @@ function renderApps(apps) {
   }
   if (!apps.length) $("apps").append(element("p","small","Keine geöffneten Anwendungen gemeldet."));
 }
+function renderViewer() {
+  const caps = viewerCaps, buttons = $("viewerButtons");
+  buttons.replaceChildren();
+  const ready = Boolean(caps?.available && currentStatus.agent_online);
+  $("viewerState").textContent = !caps ? "—" : ready ? "Bereit" : "Nicht verfügbar";
+  $("viewerState").className = "pill" + (ready ? " online" : "");
+  $("viewerReason").textContent = caps?.reason || (caps && !currentStatus.agent_online ? "Agent antwortet nicht." : "");
+  $("viewerReason").hidden = !$("viewerReason").textContent;
+  if (!caps || caps.kind === "none") return;
+  // Ohne erzwungene Modi (Apple) gibt es nur einen Knopf; der Modus wird in Apples App gewählt.
+  const modes = caps.modes_enforced ? caps.modes : ["control"];
+  for (const mode of modes) {
+    const label = caps.modes_enforced ? modeLabels[mode] : "Bildschirmfreigabe öffnen";
+    const button = element("button", mode === "view" ? "secondary" : "", label);
+    button.disabled = !ready;
+    button.addEventListener("click", () => openViewer(mode, button));
+    buttons.append(button);
+  }
+  $("viewerNote").hidden = caps.kind !== "external";
+}
+async function loadViewer() {
+  viewerCaps = await api("/api/viewer");
+  renderViewer();
+}
+async function openViewer(mode, button) {
+  button.disabled = true;
+  try {
+    const session = await api("/api/viewer/session", {method:"POST", body:JSON.stringify({mode})});
+    if (session.kind === "external" && session.url) {
+      window.location.assign(session.url);
+      notify("Bildschirmfreigabe wird geöffnet …");
+    } else if (session.demo) {
+      notify("Demo: Hier würde sich die Bildschirmfreigabe öffnen.");
+    } else {
+      notify("Dieser Betrachter wird in dieser Version noch nicht unterstützt.");
+    }
+    await poll();
+  } catch(error) {
+    notify(error.message);
+    loadViewer().catch(() => {});
+  } finally { button.disabled = false; renderViewer(); }
+}
 async function poll() {
   if (busy || !token) return;
   busy = true;
@@ -135,6 +180,8 @@ async function poll() {
     $("retention").textContent = status.retention_days + " Tage";
     $("scope").textContent = status.scope;
     renderApps(apps.apps);
+    if (!viewerCaps || ++pollCount % 10 === 0) await loadViewer();
+    else renderViewer();
     if (!historyMode) {
       const params = query(); params.set("after", String(latest));
       const result = await api("/api/events?" + params);
@@ -157,17 +204,19 @@ async function poll() {
       $("connection").className = "pill";
       $("offline").hidden = false;
       $("apps").querySelectorAll("button").forEach(button => { button.disabled = true; });
+      $("viewerButtons").querySelectorAll("button").forEach(button => { button.disabled = true; });
       notify(error.message);
     }
   } finally { busy = false; }
 }
 function disconnect() {
-  token = ""; generation++; pending.clear(); rows = []; latest = 0;
+  token = ""; generation++; pending.clear(); rows = []; latest = 0; viewerCaps = null; pollCount = 0;
   selectedApp = null; clearTimeout(searchTimer);
   clearInterval(timer); timer = null;
   $("token").value = ""; $("dashboard").hidden = true; $("login").hidden = false;
   $("connection").textContent = "Nicht verbunden"; $("connection").className = "pill";
   $("message").hidden = true; $("events").replaceChildren(); $("apps").replaceChildren();
+  $("viewerButtons").replaceChildren();
   if ($("quitDialog").open) $("quitDialog").close();
 }
 async function connect() {
