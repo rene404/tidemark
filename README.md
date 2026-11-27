@@ -177,6 +177,10 @@ Alle folgenden Optionen werden **auf dem iMac beim Start** festgelegt, nicht
   --allow-app com.apple.TextEdit
 ```
 
+Mit `--viewer-host <Tailscale-Name>` zeigt das Dashboard den Bereich „Live-Bild“
+mit einem Knopf, der Apples Bildschirmfreigabe (`vnc://…`) öffnet; siehe
+[VIEWER-NAHT.md](docs/VIEWER-NAHT.md).
+
 Firefox ist standardmäßig freigegeben. `--allow-app` erlaubt zusätzliche
 GUI-Anwendungen. Ein anderer lokaler Port ist mit `--port 8767` möglich; das
 Ziel des SSH-Tunnels muss dann entsprechend geändert werden. Der Host bleibt

@@ -70,6 +70,8 @@ def make_server(service, token: str, port: int = 8765):
                     self._reply(200, (WEB / filename).read_bytes(), mime)
                 elif route.path == "/api/status":
                     self._reply(200, service.status())
+                elif route.path == "/api/viewer":
+                    self._reply(200, service.viewer_status())
                 elif route.path == "/api/apps":
                     self._reply(200, {"apps": service.apps()})
                 elif route.path == "/api/events":
@@ -103,27 +105,39 @@ def make_server(service, token: str, port: int = 8765):
             except Exception:
                 self._reply(500, {"error": "Interner Fehler. Prüfe die lokale Installation."})
 
+        def _json_body(self):
+            if self.headers.get_content_type() != "application/json":
+                raise ServiceError("JSON erforderlich.", 415)
+            if self.headers.get("Transfer-Encoding"):
+                raise ServiceError("Transfer-Encoding wird nicht unterstützt.", 400)
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 1 <= length <= 4096:
+                raise ServiceError("Ungültige Nachrichtengröße.", 413)
+            payload = json.loads(self.rfile.read(length))
+            if not isinstance(payload, dict):
+                raise ValueError("JSON-Objekt erforderlich.")
+            return payload
+
         def do_POST(self):
             try:
                 self._guard()
-                if self.path != "/api/commands/quit":
+                if self.path == "/api/commands/quit":
+                    payload = self._json_body()
+                    if set(payload) != {"pid", "bundle_id", "launched_at"}:
+                        raise ValueError("pid, bundle_id und launched_at sind erforderlich.")
+                    if type(payload["pid"]) is not int or not 1 <= payload["pid"] < 2**31:
+                        raise ValueError("Ungültige Prozess-ID.")
+                    if not isinstance(payload["bundle_id"], str) or not isinstance(payload["launched_at"], str):
+                        raise ValueError("Ungültige App-Identität.")
+                    command_id = service.request_quit(**payload)
+                    self._reply(202, {"command_id": command_id, "status": "queued"})
+                elif self.path == "/api/viewer/session":
+                    payload = self._json_body()
+                    if set(payload) != {"mode"} or not isinstance(payload["mode"], str):
+                        raise ValueError("mode ist erforderlich.")
+                    self._reply(201, service.open_viewer(payload["mode"]))
+                else:
                     raise ServiceError("Nicht gefunden.", 404)
-                if self.headers.get_content_type() != "application/json":
-                    raise ServiceError("JSON erforderlich.", 415)
-                if self.headers.get("Transfer-Encoding"):
-                    raise ServiceError("Transfer-Encoding wird nicht unterstützt.", 400)
-                length = int(self.headers.get("Content-Length", "0"))
-                if not 1 <= length <= 4096:
-                    raise ServiceError("Ungültige Nachrichtengröße.", 413)
-                payload = json.loads(self.rfile.read(length))
-                if not isinstance(payload, dict) or set(payload) != {"pid", "bundle_id", "launched_at"}:
-                    raise ValueError("pid, bundle_id und launched_at sind erforderlich.")
-                if type(payload["pid"]) is not int or not 1 <= payload["pid"] < 2**31:
-                    raise ValueError("Ungültige Prozess-ID.")
-                if not isinstance(payload["bundle_id"], str) or not isinstance(payload["launched_at"], str):
-                    raise ValueError("Ungültige App-Identität.")
-                command_id = service.request_quit(**payload)
-                self._reply(202, {"command_id": command_id, "status": "queued"})
             except ServiceError as error:
                 self._reply(error.status, {"error": str(error)})
             except (ValueError, UnicodeError) as error:

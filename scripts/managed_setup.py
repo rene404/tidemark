@@ -90,7 +90,8 @@ def install(args):
                          "Erst zum Standardbenutzer machen (oder --erlaube-admin für Tests).")
     check_interpreter(account.pw_uid)
     config = managed.parse({"target_user": args.user, "allow_apps": args.allow_app or ["org.mozilla.firefox"],
-                            "retention_days": args.retention_days, "port": 8765})
+                            "retention_days": args.retention_days, "port": 8765,
+                            "viewer_host": args.viewer_host})
 
     managed.SYSTEM_DIRECTORY.mkdir(parents=True, exist_ok=True)
     if APP.exists():
@@ -108,7 +109,8 @@ def install(args):
 
     write_root_file(managed.CONFIG_PATH, json.dumps({
         "target_user": config.target_user, "allow_apps": list(config.allow_apps),
-        "retention_days": config.retention_days, "port": config.port}, indent=2).encode())
+        "retention_days": config.retention_days, "port": config.port,
+        **({"viewer_host": config.viewer_host} if config.viewer_host else {})}, indent=2).encode())
     managed.load()  # Selbstprüfung: Besitz/Rechte so, wie der Agent sie verlangt
 
     remove_old_user_agent(account)
@@ -152,6 +154,7 @@ def main():
     setup.add_argument("--user", required=True, help="Konto, in dem der Agent laufen soll")
     setup.add_argument("--allow-app", action="append", help="Bundle-ID (Standard: Firefox)")
     setup.add_argument("--retention-days", type=int, default=30)
+    setup.add_argument("--viewer-host", help="Tailscale-Name dieses Macs für das Live-Bild")
     setup.add_argument("--erlaube-admin", action="store_true", help="Nur für Tests")
     commands.add_parser("remove")
     args = parser.parse_args()

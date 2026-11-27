@@ -30,6 +30,8 @@ Bibliotheken oder Dienste.
 | `macscope/server.py` | Nur Loopback; Schlüssel-, Host- und Origin-Prüfung |
 | `macscope/web/` | Anmeldung, Zeitleiste, Suchfilter, App-Liste, Beenden-Dialog |
 | `macscope/demo.py` | Ausdrückliche Simulation, keine echte OS-Aktion |
+| `macscope/viewer.py` | Viewer-Naht Schicht 1: Live-Bild-Backends (Phase A: Apple-Bildschirmfreigabe) |
+| `macscope/managed.py`, `macscope/watchdog.py` | Verwalteter Modus und root-Wächter |
 | `scripts/autostart.py` | Optionaler LaunchAgent im eigenen Benutzerkonto |
 
 Native AppKit-Aufrufe erfolgen auf dem Hauptthread. HTTP-Anfragen stellen

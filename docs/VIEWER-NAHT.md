@@ -1,6 +1,8 @@
 # Konzept: Viewer-Naht
 
-Status: **Entwurf zur Entscheidung** · Phase A (Vorbereitung für B1–B3)
+Status: **Schicht 1 für Phase A umgesetzt** (`macscope/viewer.py`) · Schicht 2 spezifiziert, Code ab B1
+
+**Entschieden (2026-11-27):** Der Betrachter in Phase B läuft **im Browser-Dashboard**, nicht als eigene Swift-App.
 
 ## Ziel
 
@@ -73,9 +75,10 @@ class ViewerBackend(Protocol):
     def close_session(self, session: str) -> None: ...
 ```
 
-Welches Backend aktiv ist, steht in `managed.json` (`"viewer": "apple"`), im
-unverwalteten Modus über eine Startoption. Das Dashboard fragt nie nach dem
-Backend-Namen, sondern nur nach `kind` und den Fähigkeiten.
+In Phase A gibt es nur `AppleBackend` (echt) und `DemoBackend` (`--demo`). Die
+Auswahl per Konfiguration (`"viewer": …`) kommt mit B1, sobald es eine zweite
+echte Quelle gibt. Das Dashboard fragt nie nach dem Backend-Namen, sondern nur
+nach `kind` und den Fähigkeiten.
 
 ### HTTP-Endpunkte (gleiche Absicherung wie heute: Loopback, Schlüssel, Host/Origin)
 
@@ -83,23 +86,26 @@ Backend-Namen, sondern nur nach `kind` und den Fähigkeiten.
 |---|---|---|
 | `GET` | `/api/viewer` | Fähigkeiten + laufende Sitzung |
 | `POST` | `/api/viewer/session` | `{"mode": "view"\|"control"}` → Deskriptor (`201`) |
-| `DELETE` | `/api/viewer/session` | Sitzung beenden (`204`) |
+| `DELETE` | `/api/viewer/session` | Sitzung beenden (`204`), ab B1 |
 | `GET` (WebSocket) | `/api/viewer/stream` | nur `embedded`, ab B1 (Schicht 2) |
 
 ### Protokoll in der Zeitleiste
 
-Neue Ereignistypen: `viewer.requested`, `viewer.opened`, `viewer.closed`,
-`viewer.refused`, jeweils mit Modus (`view`/`control`) und Backend. Damit ist
+Ereignistypen: `viewer.requested` und `viewer.refused` (Phase A), `viewer.opened`
+und `viewer.closed` (ab B1), jeweils mit Modus (`view`/`control`) und Backend.
+Sie werden **auch während einer Pause** protokolliert. Damit ist
 im Verlauf nachvollziehbar, **wann jemand zugesehen oder gesteuert hat**.
 
 ### Phase A: AppleBackend
 
-- `capabilities`: `kind = external`, `view`/`control` = true, `pre_login` = true.
+- `capabilities`: `kind = external`, `modes_enforced = false` (Ansehen/Steuern wählt man
+  in Apples App, tidemark kann das nicht erzwingen), `pre_login = true`.
   `available` prüft, ob die Bildschirmfreigabe läuft (TCP-Verbindung auf
-  `127.0.0.1:5900` möglich). Wenn nicht, gibt es einen Hinweis im Dashboard:
-  „Bildschirmfreigabe ist aus“.
+  `127.0.0.1:5900` möglich, Ergebnis 30 s zwischengespeichert). Wenn nicht, gibt es
+  einen Hinweis im Dashboard: „Bildschirmfreigabe ist aus“.
 - `open_session` liefert `vnc://<Tailscale-Name>`. Der Name steht in
-  `managed.json` (`"viewer_host"`), damit der Link auch von unterwegs stimmt.
+  `managed.json` (`"viewer_host"`, Installer: `--viewer-host`) bzw. kommt im
+  unverwalteten Modus aus `--viewer-host`. Erlaubt sind nur Hostname oder IP.
   Das Dashboard öffnet ihn, und macOS startet die Bildschirmfreigabe-App.
 - Grenze: In A sieht tidemark nur die **Anfrage** (`viewer.requested`), nicht
   ob Apple tatsächlich verbunden hat. Optional später: aufgebaute Verbindungen
@@ -107,10 +113,11 @@ im Verlauf nachvollziehbar, **wann jemand zugesehen oder gesteuert hat**.
 
 ### Dashboard (Phase A)
 
-Ein neuer Bereich **„Live-Bild“** mit Status (bereit / aus / läuft) und zwei
-Knöpfen: „Ansehen“ und „Steuern“. Bei `external` öffnet das Dashboard den Link,
-bei `embedded` (ab B1) den eingebetteten Betrachter auf derselben Seite. Der
-Rest der Oberfläche merkt keinen Unterschied.
+Ein neuer Bereich **„Live-Bild“** mit Status (Bereit / Nicht verfügbar + Grund).
+Bei `modes_enforced = false` (Apple) gibt es **einen** Knopf „Bildschirmfreigabe
+öffnen“, bei erzwingbaren Modi (ab B1) „Ansehen“ und „Steuern“. Bei `external`
+öffnet das Dashboard den Link, bei `embedded` (ab B1) den eingebetteten
+Betrachter auf derselben Seite. Der Rest der Oberfläche merkt keinen Unterschied.
 
 ## Schicht 2 · Strom-Protokoll (Spezifikation, Code ab B1)
 
@@ -156,8 +163,9 @@ Das vermeidet Probleme mit dem Tastaturlayout (deutsches Layout auf beiden Seite
   Menüleiste das deutlich an (z. B. „◉ MS · wird angesehen“). Apple macht das in
   Phase A bereits selbst. Für das eigene Modul ist es Pflicht, nicht optional.
 - **Jede Sitzung wird protokolliert** (siehe Ereignistypen oben).
-- **Steuern ist eine eigene Freigabe**, getrennt vom Ansehen, und lässt sich im
-  verwalteten Modus abschalten (`"viewer_control": false`).
+- **Steuern ist eine eigene Freigabe**, getrennt vom Ansehen, und lässt sich ab B2 im
+  verwalteten Modus abschalten (`"viewer_control": false`). Bei Apple ist das
+  nicht durchsetzbar und deshalb in Phase A nicht vorgesehen.
 
 ## Risiken für Phase B (früh prüfen)
 
@@ -172,15 +180,26 @@ Das vermeidet Probleme mit dem Tastaturlayout (deutsches Layout auf beiden Seite
 
 ## Umsetzungsplan
 
-**Phase A (jetzt):**
+**Phase A:**
 
-1. `macscope/viewer.py`: `ViewerBackend`, `AppleBackend`, `DemoBackend` (für Demo-Modus/Tests)
-2. Service + Server: `/api/viewer` und `/api/viewer/session`, Ereignistypen, Tests
-3. `managed.json`: `viewer`, `viewer_host`, `viewer_control` (mit Prüfung)
-4. Dashboard: Bereich „Live-Bild“
-5. Abnahme auf dem Test-Mac: Bildschirmfreigabe als Admin einschalten, „Ansehen“
-   und „Steuern“ vom Laptop über Tailscale, vor und nach der Anmeldung
-   → **danach ist TeamViewer ersetzbar**
+1. ✅ `macscope/viewer.py`: `AppleBackend`, `DemoBackend`, `NoBackend`
+2. ✅ Service + Server: `GET /api/viewer`, `POST /api/viewer/session`, Ereignistypen, Tests
+3. ✅ `managed.json`/Installer/Startoption: `viewer_host` (mit Prüfung)
+4. ✅ Dashboard: Bereich „Live-Bild“
+5. ⬜ Abnahme auf dem Test-Mac (unten) → **danach ist TeamViewer ersetzbar**
+
+### Abnahme Phase A auf dem Test-Mac
+
+| ✓ | Schritt | Erwartung |
+|---|---|---|
+| [ ] | Agent mit `--viewer-host <Tailscale-Name>` (bzw. Installer `--viewer-host`), Bildschirmfreigabe **aus** | Dashboard: „Nicht verfügbar“ + Hinweis „Bildschirmfreigabe ist aus“ |
+| [ ] | Als Admin: Systemeinstellungen → Allgemein → Freigaben → Bildschirmfreigabe an | Nach ≤ 30 s „Bereit“ |
+| [ ] | Prüfen, ob der Port-Test (Verbindung auf 5900) am Ziel-Mac sichtbare Spuren hinterlässt (Meldung, Protokoll) | Keine Meldung für den Benutzer |
+| [ ] | Laptop: „Bildschirmfreigabe öffnen“ | Bildschirmfreigabe-App startet mit `vnc://<Tailscale-Name>`, Anmeldung klappt; Zeitleiste: „Live-Bild angefragt“ |
+| [ ] | In Apples App „Beobachten“ und „Steuern“ umschalten | Beides funktioniert; am Ziel-Mac zeigt die Menüleiste, dass der Bildschirm geteilt wird |
+| [ ] | Laptop außerhalb des Heimnetzes (Hotspot) | Wie oben |
+| [ ] | Ziel-Mac neu starten, **nicht** anmelden, vom Laptop `vnc://<Tailscale-Name>` direkt öffnen | Anmeldefenster sichtbar und bedienbar (Dashboard ist vor der Anmeldung nicht erreichbar) |
+| [ ] | Als Standardbenutzer am Ziel-Mac: Bildschirmfreigabe abschalten versuchen | Verlangt Admin-Passwort |
 
 **B1 (später):** WebSocket-Weiterleitung + Browser-Betrachter + Demo-Quelle →
 Swift-Quelle (nur ansehen) → `EmbeddedBackend`.

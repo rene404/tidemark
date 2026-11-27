@@ -40,7 +40,8 @@ sudo bash install-managed.command install --user BENUTZER
 ```
 
 Optionen: `--allow-app BUNDLE-ID` (mehrfach; Standard: nur Firefox),
-`--retention-days N`, `--erlaube-admin` (nur für Tests mit Admin-Konto).
+`--retention-days N`, `--viewer-host NAME` (Tailscale-Name für das Live-Bild),
+`--erlaube-admin` (nur für Tests mit Admin-Konto).
 
 Der Installer verweigert Administrator-Konten als Ziel, entfernt einen alten
 Benutzer-Autostart (`local.macscope.agent`) des Zielbenutzers und lädt Wächter
