@@ -19,6 +19,7 @@ from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from macscope import __version__
 from macscope.store import Store
 
 
@@ -76,6 +77,7 @@ def main():
                 page.locator("#dashboard").wait_for(state="visible")
                 page.locator("#apps .app").first.wait_for()
                 assert page.locator("#demo").is_visible()
+                assert page.locator("#version").inner_text() == f"LOCAL / {__version__}"
                 assert not page.locator("#token").input_value()
                 assert page.evaluate("localStorage.length") == 0
                 assert page.evaluate("sessionStorage.length") == 0

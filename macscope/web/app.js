@@ -181,6 +181,7 @@ async function poll() {
     $("connection").textContent = status.agent_online ? "● Verbunden" : "Agent antwortet nicht";
     $("connection").className = "pill" + (status.agent_online ? " online" : "");
     $("hostline").textContent = status.hostname + " · " + status.platform;
+    $("version").textContent = "LOCAL / " + status.version;
     $("demo").hidden = !status.demo; $("paused").hidden = !status.paused;
     $("offline").hidden = status.agent_online;
     $("active").textContent = status.active_app?.name || "—";
